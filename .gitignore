@@ -1,0 +1,24 @@
+# Local machine / environment config
+eim_config.toml
+.env
+.env.*
+.python-version
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Generated tool output
+tools/out/
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*.log
