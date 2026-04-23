@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.com>
+Date: Thu, 23 Apr 2026 22:40:00 +0200
+Subject: [PATCH 4/4] light: expose basic info serial number from factory data
+
+diff --git a/components/esp_matter/data_model/legacy/esp_matter_cluster.cpp b/components/esp_matter/data_model/legacy/esp_matter_cluster.cpp
+--- a/components/esp_matter/data_model/legacy/esp_matter_cluster.cpp
++++ b/components/esp_matter/data_model/legacy/esp_matter_cluster.cpp
+@@ -249,6 +249,7 @@ cluster_t *create(endpoint_t *endpoint, config_t *config, uint8_t flags)
+         attribute::create_hardware_version(cluster, 0);
+         attribute::create_hardware_version_string(cluster, NULL, 0);
+         attribute::create_software_version(cluster, 0);
+         attribute::create_software_version_string(cluster, NULL, 0);
++        attribute::create_serial_number(cluster, NULL, 0);
+         attribute::create_unique_id(cluster, NULL, 0);
+         attribute::create_capability_minima(cluster, NULL, 0, 0);
+         attribute::create_specification_version(cluster, 0);
+         attribute::create_max_paths_per_invoke(cluster, 0);
+
+diff --git a/components/esp_matter/data_model/generated/clusters/basic_information/basic_information.cpp b/components/esp_matter/data_model/generated/clusters/basic_information/basic_information.cpp
+--- a/components/esp_matter/data_model/generated/clusters/basic_information/basic_information.cpp
++++ b/components/esp_matter/data_model/generated/clusters/basic_information/basic_information.cpp
+@@ -239,6 +239,7 @@ cluster_t *create(endpoint_t *endpoint, config_t *config, uint8_t flags)
+         attribute::create_hardware_version(cluster, config->hardware_version);
+         attribute::create_hardware_version_string(cluster, config->hardware_version_string, sizeof(config->hardware_version_string));
+         attribute::create_software_version(cluster, config->software_version);
+         attribute::create_software_version_string(cluster, config->software_version_string, sizeof(config->software_version_string));
++        attribute::create_serial_number(cluster, NULL, 0);
+         attribute::create_unique_id(cluster, config->unique_id, sizeof(config->unique_id));
+         attribute::create_specification_version(cluster, config->specification_version);
+         attribute::create_max_paths_per_invoke(cluster, config->max_paths_per_invoke);
+         attribute::create_capability_minima(cluster, NULL, 0, 0);
+
+--
+2.39.5 (Apple Git-154)

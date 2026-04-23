@@ -5,7 +5,7 @@ User-facing entrypoint: `tools/light_pipeline.py`
 The pipeline shells into ESP-IDF automatically after it finds `IDF_PATH`. No manual `source export.sh` step needed.
 If Matter tooling such as `gn` is missing, the pipeline also runs CHIP bootstrap automatically before the firmware build step.
 If nested git submodules under `esp-matter/connectedhomeip` are missing, the pipeline also runs `git submodule update --init --recursive` from repo root before the build step.
-If repo patch files exist under top-level `patches/`, the pipeline applies them to `esp-matter/connectedhomeip/connectedhomeip` before build/bootstrap commands.
+If repo patch files exist under top-level `patches/`, the pipeline reports them but does not apply them. `esp-matter/` stays untouched by `light_pipeline.py` execution.
 
 Target flow:
 

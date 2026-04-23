@@ -101,6 +101,13 @@ HTML_TEMPLATE = """<!doctype html>
       transform-origin: center center;
     }}
 
+    .header-stack {{
+      display: grid;
+      justify-items: center;
+      gap: 0.3mm;
+      width: 100%;
+    }}
+
     .brand {{
       display: flex;
       justify-content: center;
@@ -122,6 +129,17 @@ HTML_TEMPLATE = """<!doctype html>
       line-height: 1;
       letter-spacing: 0.04mm;
       white-space: nowrap;
+    }}
+
+    .serial-number {{
+      width: 100%;
+      text-align: center;
+      font-size: 1.05mm;
+      line-height: 1;
+      font-weight: 600;
+      letter-spacing: 0.05mm;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
     }}
 
     .qr-wrap {{
@@ -347,10 +365,12 @@ HTML_TEMPLATE = """<!doctype html>
         paddingTop: mmToPixels(0.55 * contentScale),
         paddingBottom: mmToPixels(0.7 * contentScale),
         gap: mmToPixels(0.55 * contentScale),
+        headerGap: mmToPixels(0.3 * contentScale),
         brandFontPx: mmToPixels(1.95 * contentScale),
         iconSizePx: mmToPixels(1.65 * contentScale),
         iconGapPx: mmToPixels(0.45 * contentScale),
         qrSizePx: mmToPixels(8.2 * contentScale),
+        serialFontPx: mmToPixels(1.05 * contentScale),
         manualFontPx: mmToPixels(1.32 * contentScale),
       }};
     }}
@@ -429,6 +449,14 @@ HTML_TEMPLATE = """<!doctype html>
         brandY
       );
 
+      const serialText = label.serial_num || "";
+      ctx.font = `600 ${{metrics.serialFontPx}}px "Avenir Next", "Segoe UI", sans-serif`;
+      const serialMetrics = ctx.measureText(serialText);
+      const serialHeight = textHeight(serialMetrics, metrics.serialFontPx);
+      const serialX = metrics.contentLeftPx + ((metrics.contentWidthPx - serialMetrics.width) / 2);
+      const serialY = brandY + brandHeight + metrics.headerGap;
+      ctx.fillText(serialText, serialX, serialY);
+
       const manualText = formatManualCode(label.manualcode);
       ctx.font = `600 ${{metrics.manualFontPx}}px "Avenir Next", "Segoe UI", sans-serif`;
       const manualMetrics = ctx.measureText(manualText);
@@ -443,7 +471,7 @@ HTML_TEMPLATE = """<!doctype html>
       ctx.fillText(manualText, manualX, manualY);
 
       const qrCanvas = await qrToCanvas(label.qrcode, metrics.qrSizePx);
-      const qrRegionTop = brandY + brandHeight + metrics.gap;
+      const qrRegionTop = serialY + serialHeight + metrics.gap;
       const qrRegionBottom = manualY - metrics.gap;
       const qrY = qrRegionTop + Math.max(0, Math.floor((qrRegionBottom - qrRegionTop - metrics.qrSizePx) / 2));
       const qrX = metrics.contentLeftPx + Math.floor((metrics.contentWidthPx - metrics.qrSizePx) / 2);
@@ -488,7 +516,10 @@ HTML_TEMPLATE = """<!doctype html>
       const item = make("section", "label-item");
       const card = make("div", "label");
       const content = make("div", "label-content");
+      const header = make("div", "header-stack");
       const brand = makeBrand();
+      const serialNumber = make("div", "serial-number", label.serial_num);
+      header.append(brand, serialNumber);
 
       const qrWrap = make("div", "qr-wrap");
       const qrBox = make("div", "qr-box");
@@ -504,7 +535,7 @@ HTML_TEMPLATE = """<!doctype html>
       }});
       actions.append(downloadButton);
 
-      content.append(brand, qrWrap, manualCode);
+      content.append(header, qrWrap, manualCode);
       card.append(content);
       item.append(card, actions);
       sheet.append(item);

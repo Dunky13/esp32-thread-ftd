@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -643,6 +644,8 @@ class GenerateLabelHtmlTests(unittest.TestCase):
             self.assertIn("position: absolute;", html)
             self.assertIn("calc(-50% + var(--content-offset-x))", html)
             self.assertIn("calc(-50% + var(--content-offset-y))", html)
+            self.assertIn("serial-number", html)
+            self.assertIn('make("div", "serial-number", label.serial_num)', html)
             self.assertIn("download-button", html)
             self.assertIn("renderLabelToCanvas", html)
             self.assertIn('canvas.toDataURL("image/png")', html)
@@ -1342,106 +1345,66 @@ class LightPipelineTests(unittest.TestCase):
             )
         )
 
-    def test_ensure_repo_patches_applied_applies_pending_patch(self) -> None:
+    def test_repo_patch_status_reports_needs_apply(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = pathlib.Path(temp_dir)
-            esp_matter_root = temp_root / "esp-matter"
-            chip_root = temp_root / "esp-matter" / "connectedhomeip" / "connectedhomeip"
-            patch_dir = temp_root / "patches"
-            chip_root.mkdir(parents=True)
-            patch_dir.mkdir()
-            patch_path = patch_dir / "fix.patch"
+            patch_path = temp_root / "fix.patch"
             patch_path.write_text("patch", encoding="utf-8")
 
-            apply_check = unittest.mock.Mock(returncode=0, stdout="", stderr="")
-            apply_run = unittest.mock.Mock()
+            with patch.object(light_pipeline.subprocess, "run") as mocked_run:
+                mocked_run.side_effect = [
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+                ]
+                status = light_pipeline.repo_patch_status(patch_path)
 
-            with patch.object(light_pipeline, "ESP_MATTER_ROOT", esp_matter_root), patch.object(
-                light_pipeline, "CHIP_ROOT", chip_root
-            ), patch.object(light_pipeline, "PATCHES_DIR", patch_dir), patch.object(
-                light_pipeline.subprocess, "run", side_effect=[apply_check, apply_run]
-            ) as mocked_run, patch("builtins.print") as mocked_print:
-                light_pipeline.ensure_repo_patches_applied()
+        self.assertEqual(status, "needs_apply")
 
-        mocked_print.assert_called_once_with("    Applying repo patch `fix.patch` to `connectedhomeip`")
-        self.assertEqual(
-            mocked_run.call_args_list[1],
-            unittest.mock.call(
-                ["git", "apply", str(patch_path)],
-                cwd=chip_root,
-                check=True,
-            ),
-        )
-
-    def test_ensure_repo_patches_applied_skips_already_applied_patch(self) -> None:
+    def test_repo_patch_status_reports_already_applied(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = pathlib.Path(temp_dir)
-            esp_matter_root = temp_root / "esp-matter"
-            chip_root = temp_root / "esp-matter" / "connectedhomeip" / "connectedhomeip"
-            patch_dir = temp_root / "patches"
-            chip_root.mkdir(parents=True)
-            patch_dir.mkdir()
-            patch_path = patch_dir / "fix.patch"
+            patch_path = temp_root / "fix.patch"
             patch_path.write_text("patch", encoding="utf-8")
 
-            apply_check = unittest.mock.Mock(returncode=1, stdout="", stderr="nope")
-            reverse_check = unittest.mock.Mock(returncode=0, stdout="", stderr="")
+            with patch.object(light_pipeline.subprocess, "run") as mocked_run:
+                mocked_run.side_effect = [
+                    subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="does not apply"),
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+                ]
+                status = light_pipeline.repo_patch_status(patch_path)
 
-            with patch.object(light_pipeline, "ESP_MATTER_ROOT", esp_matter_root), patch.object(
-                light_pipeline, "CHIP_ROOT", chip_root
-            ), patch.object(light_pipeline, "PATCHES_DIR", patch_dir), patch.object(
-                light_pipeline.subprocess, "run", side_effect=[apply_check, reverse_check]
-            ) as mocked_run, patch("builtins.print") as mocked_print:
-                light_pipeline.ensure_repo_patches_applied()
+        self.assertEqual(status, "already_applied")
 
-        mocked_print.assert_called_once_with("    Repo patch already applied: `fix.patch` to `connectedhomeip`")
-        self.assertEqual(mocked_run.call_count, 2)
-        self.assertEqual(
-            mocked_run.call_args_list[1],
-            unittest.mock.call(
-                ["git", "apply", "--reverse", "--check", str(patch_path)],
-                cwd=chip_root,
-                check=False,
-                text=True,
-                capture_output=True,
-            ),
-        )
-
-    def test_ensure_repo_patches_applied_falls_back_to_esp_matter_root(self) -> None:
+    def test_ensure_repo_patches_applied_applies_needed_patches(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = pathlib.Path(temp_dir)
-            esp_matter_root = temp_root / "esp-matter"
-            chip_root = esp_matter_root / "connectedhomeip" / "connectedhomeip"
             patch_dir = temp_root / "patches"
-            esp_matter_root.mkdir(parents=True)
-            chip_root.mkdir(parents=True)
             patch_dir.mkdir()
-            patch_path = patch_dir / "fix.patch"
-            patch_path.write_text("patch", encoding="utf-8")
+            (patch_dir / "fix.patch").write_text("patch", encoding="utf-8")
 
-            chip_apply_check = unittest.mock.Mock(returncode=1, stdout="", stderr="chip apply failed")
-            chip_reverse_check = unittest.mock.Mock(returncode=1, stdout="", stderr="chip reverse failed")
-            esp_matter_apply_check = unittest.mock.Mock(returncode=0, stdout="", stderr="")
-            apply_run = unittest.mock.Mock()
-
-            with patch.object(light_pipeline, "ESP_MATTER_ROOT", esp_matter_root), patch.object(
-                light_pipeline, "CHIP_ROOT", chip_root
-            ), patch.object(light_pipeline, "PATCHES_DIR", patch_dir), patch.object(
-                light_pipeline.subprocess,
-                "run",
-                side_effect=[chip_apply_check, chip_reverse_check, esp_matter_apply_check, apply_run],
-            ) as mocked_run, patch("builtins.print") as mocked_print:
+            with patch.object(light_pipeline, "PATCHES_DIR", patch_dir), patch.object(
+                light_pipeline, "ESP_MATTER_ROOT", temp_root / "esp-matter"
+            ), patch.object(light_pipeline.subprocess, "run") as mocked_run, patch("builtins.print") as mocked_print:
+                mocked_run.side_effect = [
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+                ]
                 light_pipeline.ensure_repo_patches_applied()
 
-        mocked_print.assert_called_once_with("    Applying repo patch `fix.patch` to `esp-matter`")
-        self.assertEqual(
-            mocked_run.call_args_list[3],
-            unittest.mock.call(
-                ["git", "apply", str(patch_path)],
-                cwd=esp_matter_root,
-                check=True,
-            ),
-        )
+        self.assertEqual(mocked_run.call_args_list[1].args[0], ["git", "apply", str(patch_dir / "fix.patch")])
+        mocked_print.assert_any_call("    Applying repo patch to `esp-matter/`: fix.patch")
+        mocked_print.assert_any_call("    Applied repo patches:")
+        mocked_print.assert_any_call("      - fix.patch")
+
+    def test_ensure_repo_patches_applied_ignores_missing_patch_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = pathlib.Path(temp_dir)
+            patch_dir = temp_root / "patches"
+            with patch.object(light_pipeline, "PATCHES_DIR", patch_dir), patch.object(
+                light_pipeline.subprocess, "run"
+            ) as mocked_run:
+                light_pipeline.ensure_repo_patches_applied()
+
+        mocked_run.assert_not_called()
 
     def test_ensure_matter_bootstrap_runs_when_gn_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

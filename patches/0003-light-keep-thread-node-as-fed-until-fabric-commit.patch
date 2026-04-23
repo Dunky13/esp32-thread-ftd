@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.com>
+Date: Thu, 23 Apr 2026 17:45:00 +0200
+Subject: [PATCH 2/3] light: keep Thread node as FED until fabric commit
+
+The esp-matter core brings every Thread FTD build up as router-eligible.
+For initial commissioning on a busy mesh, that allows the node to change
+parent and promote from child to router during the BLE-to-operational
+handoff. Keep uncommissioned nodes as FullEndDevice during onboarding,
+then restore router eligibility once the fabric is committed.
+---
+ esp-matter/examples/light/main/app_main.cpp | 54 ++++++++++++++++++++
+ 1 file changed, 54 insertions(+)
+
+diff --git a/examples/light/main/app_main.cpp b/examples/light/main/app_main.cpp
+--- a/examples/light/main/app_main.cpp
++++ b/examples/light/main/app_main.cpp
+@@ -20,6 +20,7 @@
+ #include <app_priv.h>
+ #include <app_reset.h>
+ #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
++#include <platform/CHIPDeviceLayer.h>
+ #include <platform/ESP32/OpenthreadLauncher.h>
+ #endif
+ 
+@@ -46,7 +47,46 @@
+ using namespace chip::app::Clusters;
+ 
+ constexpr auto k_timeout_seconds = 300;
++
++#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
++static const char *thread_device_type_name(chip::DeviceLayer::ConnectivityManager::ThreadDeviceType device_type)
++{
++    switch (device_type) {
++    case chip::DeviceLayer::ConnectivityManager::kThreadDeviceType_Router:
++        return "router";
++    case chip::DeviceLayer::ConnectivityManager::kThreadDeviceType_FullEndDevice:
++        return "full end device";
++    default:
++        return "other";
++    }
++}
++
++static void ensure_thread_device_type(chip::DeviceLayer::ConnectivityManager::ThreadDeviceType device_type,
++                                      const char *reason)
++{
++    auto &connectivity_mgr = chip::DeviceLayer::ConnectivityMgr();
++
++    if (connectivity_mgr.GetThreadDeviceType() == device_type) {
++        ESP_LOGI(TAG, "Thread device type already %s for %s", thread_device_type_name(device_type), reason);
++        return;
++    }
++
++    CHIP_ERROR err = connectivity_mgr.SetThreadDeviceType(device_type);
++    if (err != CHIP_NO_ERROR) {
++        ESP_LOGE(TAG, "Failed to set Thread device type to %s for %s: %" CHIP_ERROR_FORMAT,
++                 thread_device_type_name(device_type), reason, err.Format());
++        return;
++    }
++
++    ESP_LOGI(TAG, "Set Thread device type to %s for %s", thread_device_type_name(device_type), reason);
++}
++
++static bool is_uncommissioned()
++{
++    return chip::Server::GetInstance().GetFabricTable().FabricCount() == 0;
++}
++#endif
+ 
+ static const char *attribute_update_type_name(attribute::callback_type_t type)
+ {
+     switch (type) {
+@@ -130,6 +170,12 @@
+ 
+     case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStarted:
+         ESP_LOGI(TAG, "Commissioning session started");
++#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
++        if (is_uncommissioned()) {
++            ensure_thread_device_type(chip::DeviceLayer::ConnectivityManager::kThreadDeviceType_FullEndDevice,
++                                      "commissioning session");
++        }
++#endif
+         break;
+ 
+     case chip::DeviceLayer::DeviceEventType::kCommissioningSessionStopped:
+@@ -148,6 +194,10 @@
+     case chip::DeviceLayer::DeviceEventType::kFabricRemoved: {
+         ESP_LOGI(TAG, "Fabric removed successfully");
+         if (chip::Server::GetInstance().GetFabricTable().FabricCount() == 0) {
++#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
++            ensure_thread_device_type(chip::DeviceLayer::ConnectivityManager::kThreadDeviceType_FullEndDevice,
++                                      "fabric removal");
++#endif
+             chip::CommissioningWindowManager  &commissionMgr = chip::Server::GetInstance().GetCommissioningWindowManager();
+             constexpr auto kTimeoutSeconds = chip::System::Clock::Seconds16(k_timeout_seconds);
+             if (!commissionMgr.IsCommissioningWindowOpen()) {
+@@ -174,6 +224,9 @@
+ 
+     case chip::DeviceLayer::DeviceEventType::kFabricCommitted:
+         ESP_LOGI(TAG, "Fabric is committed");
++#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
++        ensure_thread_device_type(chip::DeviceLayer::ConnectivityManager::kThreadDeviceType_Router, "fabric commit");
++#endif
+         break;
+ 
+     case chip::DeviceLayer::DeviceEventType::kBLEDeinitialized:
+@@ -294,6 +347,13 @@
+     err = esp_matter::start(app_event_cb);
+     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
+ 
++#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
++    if (is_uncommissioned()) {
++        ensure_thread_device_type(chip::DeviceLayer::ConnectivityManager::kThreadDeviceType_FullEndDevice,
++                                  "initial commissioning");
++    }
++#endif
++
+     MEMORY_PROFILER_DUMP_HEAP_STAT("matter started");
+ 
+     /* Starting driver with default values */
+--
+2.39.5 (Apple Git-154)

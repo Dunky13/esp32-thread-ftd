@@ -1,6 +1,11 @@
-diff --git a/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hpp b/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hpp
---- a/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hpp
-+++ b/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hpp
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@example.com>
+Date: Thu, 23 Apr 2026 17:40:00 +0200
+Subject: [PATCH 1/3] thread: wait for DNS-SD before reporting attach success
+
+diff --git a/connectedhomeip/connectedhomeip/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hpp b/connectedhomeip/connectedhomeip/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hpp
+--- a/connectedhomeip/connectedhomeip/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hpp
++++ b/connectedhomeip/connectedhomeip/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hpp
 @@ -45,6 +45,7 @@
  #include <openthread/srp_client.h>
  #endif
@@ -51,3 +56,5 @@ diff --git a/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hp
  }
  
  template <class ImplClass>
+--
+2.39.5 (Apple Git-154)

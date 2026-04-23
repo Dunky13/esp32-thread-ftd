@@ -415,91 +415,89 @@ def list_repo_patch_files() -> list[pathlib.Path]:
         return []
     return sorted(path for path in PATCHES_DIR.iterdir() if path.is_file() and path.suffix == ".patch")
 
-
-def repo_patch_roots() -> list[pathlib.Path]:
-    return [CHIP_ROOT, ESP_MATTER_ROOT]
-
-
-def repo_patch_root_label(root: pathlib.Path) -> str:
-    if root == CHIP_ROOT:
-        return "connectedhomeip"
-    if root == ESP_MATTER_ROOT:
-        return "esp-matter"
-    return str(root)
+def git_apply_check_command(patch_path: pathlib.Path, *, reverse: bool = False) -> list[str]:
+    command = ["git", "apply", "--check"]
+    if reverse:
+        command.append("--reverse")
+    command.append(str(patch_path))
+    return command
 
 
-def ensure_repo_patches_applied(*, dry_run: bool = False) -> None:
+def repo_patch_status(patch_path: pathlib.Path) -> str:
+    forward_check = subprocess.run(
+        git_apply_check_command(patch_path),
+        cwd=ESP_MATTER_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if forward_check.returncode == 0:
+        return "needs_apply"
+
+    reverse_check = subprocess.run(
+        git_apply_check_command(patch_path, reverse=True),
+        cwd=ESP_MATTER_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if reverse_check.returncode == 0:
+        return "already_applied"
+
+    details = "\n".join(
+        detail
+        for detail in (
+            forward_check.stdout.strip(),
+            forward_check.stderr.strip(),
+            reverse_check.stdout.strip(),
+            reverse_check.stderr.strip(),
+        )
+        if detail
+    )
+    message = (
+        f"Repo patch cannot be applied cleanly: {patch_path.name}\n"
+        f"Patch path: {patch_path}\n"
+        f"Run `git -C {ESP_MATTER_ROOT} status --short` and inspect local submodule edits."
+    )
+    if details:
+        message = f"{message}\n{details}"
+    raise SystemExit(message)
+
+
+def ensure_repo_patches_applied() -> None:
     patch_files = list_repo_patch_files()
     if not patch_files:
         return
 
+    applied: list[str] = []
+    already_applied: list[str] = []
     for patch_path in patch_files:
-        attempted_roots: list[tuple[pathlib.Path, subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]] = []
-        for patch_root in repo_patch_roots():
-            apply_check = subprocess.run(
-                ["git", "apply", "--check", str(patch_path)],
-                cwd=patch_root,
-                check=False,
-                text=True,
-                capture_output=True,
-            )
-            if apply_check.returncode == 0:
-                print(
-                    f"    Applying repo patch `{patch_path.name}` to `{repo_patch_root_label(patch_root)}`"
-                )
-                if dry_run:
-                    break
-                try:
-                    subprocess.run(
-                        ["git", "apply", str(patch_path)],
-                        cwd=patch_root,
-                        check=True,
-                    )
-                except subprocess.CalledProcessError as exc:
-                    raise SystemExit(
-                        "Failed to apply repo patch.\n"
-                        f"Patch: {patch_path}\n"
-                        f"Target: {patch_root}\n"
-                        f"Exit code: {exc.returncode}"
-                    ) from exc
-                break
+        status = repo_patch_status(patch_path)
+        if status == "already_applied":
+            already_applied.append(patch_path.name)
+            continue
 
-            reverse_check = subprocess.run(
-                ["git", "apply", "--reverse", "--check", str(patch_path)],
-                cwd=patch_root,
-                check=False,
-                text=True,
-                capture_output=True,
+        print(f"    Applying repo patch to `esp-matter/`: {patch_path.name}")
+        try:
+            subprocess.run(
+                ["git", "apply", str(patch_path)],
+                cwd=ESP_MATTER_ROOT,
+                check=True,
             )
-            if reverse_check.returncode == 0:
-                print(
-                    f"    Repo patch already applied: `{patch_path.name}` to `{repo_patch_root_label(patch_root)}`"
-                )
-                break
+        except subprocess.CalledProcessError as exc:
+            raise SystemExit(
+                "Failed to apply repo patch.\n"
+                f"Patch: {patch_path}\n"
+                f"Exit code: {exc.returncode}"
+            ) from exc
+        applied.append(patch_path.name)
 
-            attempted_roots.append((patch_root, apply_check, reverse_check))
-        else:
-            details = []
-            for patch_root, apply_check, reverse_check in attempted_roots:
-                root_details = "\n".join(
-                    detail.strip()
-                    for detail in (
-                        apply_check.stderr,
-                        apply_check.stdout,
-                        reverse_check.stderr,
-                        reverse_check.stdout,
-                    )
-                    if detail and detail.strip()
-                )
-                if root_details:
-                    details.append(f"Target: {patch_root}\n{root_details}")
-            message = (
-                "Repo patch is present, but cannot be applied cleanly or recognized as already applied.\n"
-                f"Patch: {patch_path}"
-            )
-            if details:
-                message = f"{message}\n" + "\n".join(details)
-            raise SystemExit(message)
+    if applied:
+        print("    Applied repo patches:")
+        for patch_name in applied[:5]:
+            print(f"      - {patch_name}")
+        if len(applied) > 5:
+            print(f"      ... and {len(applied) - 5} more")
+    elif already_applied:
+        print("    Repo patches already applied in `esp-matter/`.")
 
 
 def write_build_override(
@@ -816,7 +814,7 @@ def command_requires_matter_bootstrap(command: list[str]) -> bool:
 
 def ensure_matter_bootstrap(env: dict[str, str], *, dry_run: bool = False) -> dict[str, str]:
     ensure_recursive_submodules()
-    ensure_repo_patches_applied(dry_run=dry_run)
+    ensure_repo_patches_applied()
     prepared_env = build_matter_environment(env)
     if command_exists("gn", prepared_env):
         return prepared_env
