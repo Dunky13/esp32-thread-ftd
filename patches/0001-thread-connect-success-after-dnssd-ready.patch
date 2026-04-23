@@ -1,0 +1,53 @@
+diff --git a/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hpp b/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hpp
+--- a/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hpp
++++ b/src/platform/OpenThread/GenericThreadStackManagerImpl_OpenThread.hpp
+@@ -45,6 +45,7 @@
+ #include <openthread/srp_client.h>
+ #endif
+ 
++#include <lib/dnssd/Advertiser.h>
+ #include <lib/core/CHIPEncoding.h>
+ #include <lib/support/CHIPMemString.h>
+ #include <lib/support/CodeUtils.h>
+@@ -241,6 +242,13 @@ void GenericThreadStackManagerImpl_OpenThread<ImplClass>::_OnPlatformEvent(const
+         Impl()->UnlockThreadStack();
+ #endif // CHIP_DETAIL_LOGGING
+     }
++    else if (event->Type == DeviceEventType::kServerReady)
++    {
++        if (mpConnectCallback != nullptr && Impl()->_IsThreadAttached() && Dnssd::ServiceAdvertiser::Instance().IsInitialized())
++        {
++            _OnThreadAttachFinished();
++        }
++    }
+ }
+ 
+ template <class ImplClass>
+@@ -392,11 +400,19 @@ template <class ImplClass>
+ void GenericThreadStackManagerImpl_OpenThread<ImplClass>::_OnThreadAttachFinished()
+ {
+-    if (mpConnectCallback != nullptr)
++    if (mpConnectCallback == nullptr)
+     {
+-        TEMPORARY_RETURN_IGNORED DeviceLayer::SystemLayer().ScheduleLambda([this]() {
+-            VerifyOrReturn(mpConnectCallback != nullptr);
+-            mpConnectCallback->OnResult(NetworkCommissioning::Status::kSuccess, CharSpan(), 0);
+-            mpConnectCallback = nullptr;
+-        });
++        return;
+     }
++
++    if (!Dnssd::ServiceAdvertiser::Instance().IsInitialized())
++    {
++        ChipLogProgress(DeviceLayer, "Thread attached, waiting for DNS-SD readiness before reporting connect success");
++        return;
++    }
++
++    TEMPORARY_RETURN_IGNORED DeviceLayer::SystemLayer().ScheduleLambda([this]() {
++        VerifyOrReturn(mpConnectCallback != nullptr);
++        mpConnectCallback->OnResult(NetworkCommissioning::Status::kSuccess, CharSpan(), 0);
++        mpConnectCallback = nullptr;
++    });
+ }
+ 
+ template <class ImplClass>

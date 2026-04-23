@@ -14,6 +14,10 @@ __pycache__/
 
 # Generated tool output
 tools/out/
+tools/labels
+
+device_manifest.csv
+matter-labels.html
 
 # Editor / OS noise
 .DS_Store
@@ -22,3 +26,5 @@ tools/out/
 *.swp
 *.swo
 *.log
+
+build

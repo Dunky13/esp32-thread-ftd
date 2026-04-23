@@ -1,0 +1,223 @@
+diff --git a/device_hal/device/esp32c6_devkit_c/device.c b/device_hal/device/esp32c6_devkit_c/device.c
+index 30f7d3c0..7fd283a6 100644
+--- a/device_hal/device/esp32c6_devkit_c/device.c
++++ b/device_hal/device/esp32c6_devkit_c/device.c
+@@ -28,6 +28,7 @@ led_driver_config_t led_driver_get_config()
+     led_driver_config_t config = {
+         .gpio = LED_GPIO_PIN,
+         .channel = LED_CHANNEL,
++        .swap_red_green = true,
+     };
+     return config;
+ }
+diff --git a/device_hal/led_driver/include/led_driver.h b/device_hal/led_driver/include/led_driver.h
+index 278f1b35..aa021445 100644
+--- a/device_hal/led_driver/include/led_driver.h
++++ b/device_hal/led_driver/include/led_driver.h
+@@ -24,6 +24,7 @@ typedef struct {
+     int gpio;
+     int channel;
+     bool output_invert;
++    bool swap_red_green;
+ } led_driver_config_t;
+ 
+ typedef void *led_driver_handle_t;
+diff --git a/device_hal/led_driver/utils/color_format.c b/device_hal/led_driver/utils/color_format.c
+index 930daf3c..362058c3 100644
+--- a/device_hal/led_driver/utils/color_format.c
++++ b/device_hal/led_driver/utils/color_format.c
+@@ -12,8 +12,11 @@
+ // limitations under the License
+ 
+ #include <color_format.h>
++#include <esp_log.h>
+ #include <math.h>
+ 
++static const char *TAG = "color_format";
++
+ void hsv_to_rgb(HS_color_t HS, uint8_t brightness, RGB_color_t *RGB)
+ {
+     uint16_t hue = HS.hue % 360;
+@@ -67,6 +70,9 @@ void hsv_to_rgb(HS_color_t HS, uint8_t brightness, RGB_color_t *RGB)
+     RGB->red = RGB->red * 255 / 100;
+     RGB->green = RGB->green * 255 / 100;
+     RGB->blue = RGB->blue * 255 / 100;
++
++    ESP_LOGI(TAG, "hsv_to_rgb hue:%u sat:%u brightness:%u -> r:%u g:%u b:%u",
++             HS.hue, HS.saturation, brightness, RGB->red, RGB->green, RGB->blue);
+ }
+ 
+ // A Table from color temperature to hue and saturation.
+@@ -170,4 +176,7 @@ void xy_to_rgb(XY_color_t XY, uint8_t brightness, RGB_color_t *RGB)
+     RGB->red = (uint8_t)(r * 255.0f);
+     RGB->green = (uint8_t)(g * 255.0f);
+     RGB->blue = (uint8_t)(b * 255.0f);
++
++    ESP_LOGI(TAG, "xy_to_rgb x:%u y:%u brightness:%u -> r:%u g:%u b:%u",
++             XY.x, XY.y, brightness, RGB->red, RGB->green, RGB->blue);
+ }
+diff --git a/device_hal/led_driver/ws2812/led_driver.c b/device_hal/led_driver/ws2812/led_driver.c
+index 33879e89..9de0fb60 100644
+--- a/device_hal/led_driver/ws2812/led_driver.c
++++ b/device_hal/led_driver/ws2812/led_driver.c
+@@ -22,11 +22,11 @@ static bool current_power = false;
+ static uint8_t current_brightness = 0;
+ static uint32_t current_temp = 0;
+ static HS_color_t current_HS = {0, 0};
++static bool current_swap_red_green = false;
+ static RGB_color_t mRGB;
+ 
+ led_driver_handle_t led_driver_init(led_driver_config_t *config)
+ {
+-    ESP_LOGI(TAG, "Initializing light driver");
+     esp_err_t err = ESP_OK;
+     rmt_config_t rmt_cfg = RMT_DEFAULT_CONFIG_TX(config->gpio, config->channel);
+     rmt_cfg.clk_div = 2;
+@@ -47,6 +47,9 @@ led_driver_handle_t led_driver_init(led_driver_config_t *config)
+         ESP_LOGE(TAG, "W2812 driver install failed");
+         return NULL;
+     }
++    current_swap_red_green = config->swap_red_green;
++    ESP_LOGI(TAG, "Initialized light driver gpio:%d channel:%d swap_rg:%d",
++             config->gpio, config->channel, current_swap_red_green);
+     return (led_driver_handle_t)strip;
+ }
+ 
+@@ -64,12 +67,19 @@ esp_err_t led_driver_set_RGB(led_driver_handle_t handle)
+         err = ESP_FAIL;
+     } else {
+         led_strip_t *strip = (led_strip_t *)handle;
+-        err = strip->set_pixel(strip, 0, mRGB.red, mRGB.green, mRGB.blue);
++        uint8_t red = mRGB.red;
++        uint8_t green = mRGB.green;
++        if (current_swap_red_green) {
++            red = mRGB.green;
++            green = mRGB.red;
++        }
++        ESP_LOGI(TAG, "led calc r:%d g:%d b:%d -> tx r:%d g:%d b:%d swap_rg:%d",
++                 mRGB.red, mRGB.green, mRGB.blue, red, green, mRGB.blue, current_swap_red_green);
++        err = strip->set_pixel(strip, 0, red, green, mRGB.blue);
+         if (err != ESP_OK) {
+             ESP_LOGE(TAG, "strip_set_pixel failed");
+             return err;
+         }
+-        ESP_LOGI(TAG, "led set r:%d, g:%d, b:%d", mRGB.red, mRGB.green, mRGB.blue);
+         err = strip->refresh(strip, 100);
+         if (err != ESP_OK) {
+             ESP_LOGE(TAG, "strip_refresh failed");
+diff --git a/examples/light/main/app_driver.cpp b/examples/light/main/app_driver.cpp
+index 7ac765cd..72fcaa8c 100644
+--- a/examples/light/main/app_driver.cpp
++++ b/examples/light/main/app_driver.cpp
+@@ -7,6 +7,7 @@
+ */
+ 
+ #include <esp_log.h>
++#include <inttypes.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
+@@ -37,29 +38,34 @@ static esp_err_t app_driver_light_set_power(led_driver_handle_t handle, esp_matt
+ static esp_err_t app_driver_light_set_brightness(led_driver_handle_t handle, esp_matter_attr_val_t *val)
+ {
+     int value = REMAP_TO_RANGE(val->val.u8, MATTER_BRIGHTNESS, STANDARD_BRIGHTNESS);
++    ESP_LOGI(TAG, "Driver brightness matter:%u -> std:%d", val->val.u8, value);
+     return led_driver_set_brightness(handle, value);
+ }
+ 
+ static esp_err_t app_driver_light_set_hue(led_driver_handle_t handle, esp_matter_attr_val_t *val)
+ {
+     int value = REMAP_TO_RANGE(val->val.u8, MATTER_HUE, STANDARD_HUE);
++    ESP_LOGI(TAG, "Driver hue matter:%u -> deg:%d", val->val.u8, value);
+     return led_driver_set_hue(handle, value);
+ }
+ 
+ static esp_err_t app_driver_light_set_saturation(led_driver_handle_t handle, esp_matter_attr_val_t *val)
+ {
+     int value = REMAP_TO_RANGE(val->val.u8, MATTER_SATURATION, STANDARD_SATURATION);
++    ESP_LOGI(TAG, "Driver sat matter:%u -> pct:%d", val->val.u8, value);
+     return led_driver_set_saturation(handle, value);
+ }
+ 
+ static esp_err_t app_driver_light_set_temperature(led_driver_handle_t handle, esp_matter_attr_val_t *val)
+ {
+     uint32_t value = REMAP_TO_RANGE_INVERSE(val->val.u16, STANDARD_TEMPERATURE_FACTOR);
++    ESP_LOGI(TAG, "Driver temp mireds:%u -> kelvin:%" PRIu32, val->val.u16, value);
+     return led_driver_set_temperature(handle, value);
+ }
+ 
+ static esp_err_t app_driver_light_set_xy(led_driver_handle_t handle, uint16_t x, uint16_t y)
+ {
++    ESP_LOGI(TAG, "Driver xy x:%u y:%u", x, y);
+     return led_driver_set_xy(handle, x, y);
+ }
+ 
+diff --git a/examples/light/main/app_main.cpp b/examples/light/main/app_main.cpp
+index 3223640d..0ca50c30 100644
+--- a/examples/light/main/app_main.cpp
++++ b/examples/light/main/app_main.cpp
+@@ -47,6 +47,56 @@ using namespace chip::app::Clusters;
+ 
+ constexpr auto k_timeout_seconds = 300;
+ 
++static const char *attribute_update_type_name(attribute::callback_type_t type)
++{
++    switch (type) {
++    case PRE_UPDATE:
++        return "PRE";
++    case POST_UPDATE:
++        return "POST";
++    default:
++        return "UNKNOWN";
++    }
++}
++
++static void log_attribute_update(attribute::callback_type_t type, uint16_t endpoint_id, uint32_t cluster_id,
++                                 uint32_t attribute_id, esp_matter_attr_val_t *val)
++{
++    if (endpoint_id != light_endpoint_id || !val) {
++        return;
++    }
++
++    if (cluster_id == OnOff::Id && attribute_id == OnOff::Attributes::OnOff::Id) {
++        ESP_LOGI(TAG, "[%s] OnOff=%d", attribute_update_type_name(type), val->val.b);
++        return;
++    }
++
++    if (cluster_id == LevelControl::Id && attribute_id == LevelControl::Attributes::CurrentLevel::Id) {
++        ESP_LOGI(TAG, "[%s] Level=%u", attribute_update_type_name(type), val->val.u8);
++        return;
++    }
++
++    if (cluster_id != ColorControl::Id) {
++        return;
++    }
++
++    if (attribute_id == ColorControl::Attributes::CurrentHue::Id) {
++        ESP_LOGI(TAG, "[%s] Color.CurrentHue=%u", attribute_update_type_name(type), val->val.u8);
++    } else if (attribute_id == ColorControl::Attributes::CurrentSaturation::Id) {
++        ESP_LOGI(TAG, "[%s] Color.CurrentSaturation=%u", attribute_update_type_name(type), val->val.u8);
++    } else if (attribute_id == ColorControl::Attributes::CurrentX::Id) {
++        ESP_LOGI(TAG, "[%s] Color.CurrentX=%u", attribute_update_type_name(type), val->val.u16);
++    } else if (attribute_id == ColorControl::Attributes::CurrentY::Id) {
++        ESP_LOGI(TAG, "[%s] Color.CurrentY=%u", attribute_update_type_name(type), val->val.u16);
++    } else if (attribute_id == ColorControl::Attributes::ColorTemperatureMireds::Id) {
++        ESP_LOGI(TAG, "[%s] Color.TemperatureMireds=%u", attribute_update_type_name(type), val->val.u16);
++    } else if (attribute_id == ColorControl::Attributes::ColorMode::Id) {
++        ESP_LOGI(TAG, "[%s] Color.Mode=%u", attribute_update_type_name(type), val->val.u8);
++    } else if (attribute_id == ColorControl::Attributes::EnhancedColorMode::Id) {
++        ESP_LOGI(TAG, "[%s] Color.EnhancedMode=%u", attribute_update_type_name(type), val->val.u8);
++    }
++}
++
+ #ifdef CONFIG_ENABLE_SET_CERT_DECLARATION_API
+ extern const uint8_t cd_start[] asm("_binary_certification_declaration_der_start");
+ extern const uint8_t cd_end[] asm("_binary_certification_declaration_der_end");
+@@ -152,6 +202,7 @@ static esp_err_t app_attribute_update_cb(attribute::callback_type_t type, uint16
+                                          uint32_t attribute_id, esp_matter_attr_val_t *val, void *priv_data)
+ {
+     esp_err_t err = ESP_OK;
++    log_attribute_update(type, endpoint_id, cluster_id, attribute_id, val);
+ 
+     if (type == PRE_UPDATE) {
+         /* Driver update */
