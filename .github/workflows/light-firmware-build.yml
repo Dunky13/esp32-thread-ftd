@@ -63,7 +63,10 @@ jobs:
         run: |
           set -euo pipefail
           cd esp-matter/connectedhomeip/connectedhomeip
+          # Upstream bootstrap script dereferences unset optional vars.
+          set +u
           source scripts/bootstrap.sh -p all,esp32
+          set -u
           if declare -F deactivate >/dev/null; then
             deactivate
           fi
