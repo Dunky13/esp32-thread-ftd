@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import importlib.util
 import io
 import os
@@ -26,6 +27,12 @@ try:
     )
     from .fleet_data import load_device_rows, load_manifest_rows
     from . import generate_factory_data
+    from .generate_label_html import (
+        DEFAULT_LABEL_HEIGHT_MM,
+        DEFAULT_LABEL_WIDTH_MM,
+        LABEL_BUILD_FINGERPRINT_PREFIX,
+        build_label_html_fingerprint,
+    )
     from .tool_paths import (
         CHIP_ROOT,
         DEFAULT_BUILD_DIR,
@@ -49,6 +56,12 @@ except ImportError:
     )
     from fleet_data import load_device_rows, load_manifest_rows
     import generate_factory_data
+    from generate_label_html import (
+        DEFAULT_LABEL_HEIGHT_MM,
+        DEFAULT_LABEL_WIDTH_MM,
+        LABEL_BUILD_FINGERPRINT_PREFIX,
+        build_label_html_fingerprint,
+    )
     from tool_paths import (
         CHIP_ROOT,
         DEFAULT_BUILD_DIR,
@@ -74,6 +87,122 @@ _EXAMPLE_DAC_VENDOR_IDS = {0xFFF1, 0xFFF2, 0xFFF3}
 _EXAMPLE_DAC_PRODUCT_ID_MIN = 0x8000
 _EXAMPLE_DAC_PRODUCT_ID_MAX = 0x801F
 _EXPLICIT_ATTESTATION_FIELDS = ("dac_cert", "dac_key", "pai_cert", "cd")
+
+
+def build_label_asset_text(label_row: dict[str, str]) -> str:
+    return "\n".join(
+        [
+            f"Product: {label_row['label_title']}",
+            f"Vendor: {label_row['label_subtitle']}",
+            f"Serial: {label_row['serial_num']}",
+            f"Manual Code: {label_row['manualcode']}",
+            f"QR Payload: {label_row['qrcode']}",
+            f"VID: {label_row['vendor_id']}",
+            f"PID: {label_row['product_id']}",
+            f"Discriminator: {label_row['discriminator']}",
+            f"Passcode: {label_row['passcode']}",
+            "",
+        ]
+    )
+
+
+def build_label_rows_for_assets(devices_csv: pathlib.Path) -> list[dict[str, str]]:
+    rows = load_device_rows(devices_csv)
+    return [
+        {
+            "serial_num": row["serial_num"],
+            "label_title": row["product_name"],
+            "label_subtitle": row["vendor_name"],
+            "qrcode": row["qrcode"],
+            "manualcode": row["manualcode"],
+            "vendor_id": row["vendor_id"],
+            "product_id": row["product_id"],
+            "passcode": row["passcode"],
+            "discriminator": row["discriminator"],
+        }
+        for row in rows
+    ]
+
+
+def label_csv_matches_build(
+    label_csv_path: pathlib.Path,
+    label_rows: list[dict[str, str]],
+) -> bool:
+    if not label_csv_path.is_file():
+        return False
+
+    with label_csv_path.open(newline="", encoding="utf-8") as label_csv_file:
+        reader = csv.DictReader(label_csv_file)
+        if reader.fieldnames is None:
+            return False
+        existing_rows = []
+        for row in reader:
+            cleaned = {key: (value or "").strip() for key, value in row.items()}
+            if any(cleaned.values()):
+                existing_rows.append(cleaned)
+    return existing_rows == label_rows
+
+
+def label_assets_match_build(
+    *,
+    devices_csv: pathlib.Path,
+    label_output_dir: pathlib.Path,
+    render_qr_svg: bool,
+    label_csv_path: pathlib.Path | None,
+) -> bool:
+    if not devices_csv.is_file() or not label_output_dir.is_dir():
+        return False
+
+    label_rows = build_label_rows_for_assets(devices_csv)
+    for label_row in label_rows:
+        text_path = label_output_dir / f"{label_row['serial_num']}.txt"
+        if not text_path.is_file():
+            return False
+        if text_path.read_text(encoding="utf-8") != build_label_asset_text(label_row):
+            return False
+
+        if render_qr_svg:
+            svg_path = label_output_dir / f"{label_row['serial_num']}.svg"
+            if not svg_path.is_file():
+                return False
+            if not svg_path.read_text(encoding="utf-8").strip():
+                return False
+
+    if label_csv_path is not None and not label_csv_matches_build(label_csv_path, label_rows):
+        return False
+
+    return True
+
+
+def label_html_matches_build(
+    *,
+    devices_csv: pathlib.Path,
+    label_html_path: pathlib.Path,
+) -> bool:
+    if not devices_csv.is_file() or not label_html_path.is_file():
+        return False
+
+    label_rows = [
+        {
+            "serial_num": row["serial_num"],
+            "label_title": row["product_name"],
+            "label_subtitle": row["vendor_name"],
+            "qrcode": row["qrcode"],
+            "manualcode": row["manualcode"],
+            "vendor_id": row["vendor_id"],
+            "product_id": row["product_id"],
+            "discriminator": row["discriminator"],
+        }
+        for row in load_device_rows(devices_csv)
+    ]
+    fingerprint = build_label_html_fingerprint(
+        label_rows,
+        label_width_mm=DEFAULT_LABEL_WIDTH_MM,
+        label_height_mm=DEFAULT_LABEL_HEIGHT_MM,
+    )
+    return f"{LABEL_BUILD_FINGERPRINT_PREFIX}{fingerprint}" in label_html_path.read_text(
+        encoding="utf-8"
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -225,8 +354,9 @@ def add_flash_arguments(parser: argparse.ArgumentParser, *, required_port: bool)
     )
     parser.add_argument(
         "--monitor",
-        action="store_true",
-        help="Open idf.py monitor after flashing.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Open idf.py monitor after flashing (default: enabled). Use --no-monitor to skip.",
     )
 
 
@@ -452,6 +582,58 @@ def git_apply_check_command(patch_path: pathlib.Path, *, reverse: bool = False) 
     return command
 
 
+def patch_added_blocks_present(patch_path: pathlib.Path) -> bool:
+    current_file: pathlib.Path | None = None
+    block: list[str] = []
+    file_blocks: dict[pathlib.Path, list[list[str]]] = {}
+
+    def flush_block() -> None:
+        nonlocal block
+        if current_file is not None and block:
+            file_blocks.setdefault(current_file, []).append(block)
+            block = []
+
+    for line in patch_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("+++ "):
+            flush_block()
+            path_text = line[4:].strip()
+            if path_text == "/dev/null":
+                current_file = None
+                continue
+            if path_text.startswith("b/"):
+                path_text = path_text[2:]
+            current_file = ESP_MATTER_ROOT / path_text
+            continue
+        if line.startswith("@@"):
+            flush_block()
+            continue
+        if line.startswith("diff --git "):
+            flush_block()
+            current_file = None
+            continue
+        if current_file is None:
+            continue
+        if line.startswith("+") and not line.startswith("+++"):
+            block.append(line[1:])
+            continue
+        if line.startswith("\\ No newline at end of file"):
+            continue
+        flush_block()
+
+    flush_block()
+    if not file_blocks:
+        return False
+
+    for file_path, blocks in file_blocks.items():
+        if not file_path.is_file():
+            return False
+        file_text = file_path.read_text(encoding="utf-8")
+        for added_block in blocks:
+            if "\n".join(added_block) not in file_text:
+                return False
+    return True
+
+
 def repo_patch_status(patch_path: pathlib.Path) -> str:
     forward_check = subprocess.run(
         git_apply_check_command(patch_path),
@@ -469,6 +651,8 @@ def repo_patch_status(patch_path: pathlib.Path) -> str:
         text=True,
     )
     if reverse_check.returncode == 0:
+        return "already_applied"
+    if patch_added_blocks_present(patch_path):
         return "already_applied"
 
     details = "\n".join(
@@ -1157,28 +1341,50 @@ def build_attestation_generation_command(
 
 def build_label_commands(args: argparse.Namespace, output_dir: pathlib.Path) -> list[list[str]]:
     devices_csv = output_dir / "devices.csv"
-    asset_command = [
-        sys.executable,
-        str(TOOLS_DIR / "generate_label_assets.py"),
-        "--devices-csv",
-        str(devices_csv),
-        "--output-dir",
-        str(pathlib.Path(args.label_output_dir).resolve()),
-    ]
-    if args.label_csv:
-        asset_command.extend(["--label-csv", str(pathlib.Path(args.label_csv).resolve())])
-    if args.render_qr_svg:
-        asset_command.append("--render-qr-svg")
+    label_output_dir = pathlib.Path(args.label_output_dir).resolve()
+    label_html_path = pathlib.Path(args.label_html).resolve()
+    label_csv_path = pathlib.Path(args.label_csv).resolve() if args.label_csv else None
+    commands: list[list[str]] = []
 
-    html_command = [
-        sys.executable,
-        str(TOOLS_DIR / "generate_label_html.py"),
-        "--devices-csv",
-        str(devices_csv),
-        "--output",
-        str(pathlib.Path(args.label_html).resolve()),
-    ]
-    return [asset_command, html_command]
+    if label_assets_match_build(
+        devices_csv=devices_csv,
+        label_output_dir=label_output_dir,
+        render_qr_svg=args.render_qr_svg,
+        label_csv_path=label_csv_path,
+    ):
+        print(f"Label assets up to date at {label_output_dir}; skipping generation")
+    else:
+        asset_command = [
+            sys.executable,
+            str(TOOLS_DIR / "generate_label_assets.py"),
+            "--devices-csv",
+            str(devices_csv),
+            "--output-dir",
+            str(label_output_dir),
+        ]
+        if args.label_csv:
+            asset_command.extend(["--label-csv", str(label_csv_path)])
+        if args.render_qr_svg:
+            asset_command.append("--render-qr-svg")
+        commands.append(asset_command)
+
+    if label_html_matches_build(
+        devices_csv=devices_csv,
+        label_html_path=label_html_path,
+    ):
+        print(f"Label HTML up to date at {label_html_path}; skipping generation")
+    else:
+        html_command = [
+            sys.executable,
+            str(TOOLS_DIR / "generate_label_html.py"),
+            "--devices-csv",
+            str(devices_csv),
+            "--output",
+            str(label_html_path),
+        ]
+        commands.append(html_command)
+
+    return commands
 
 
 def build_flash_generation_command(
@@ -1255,14 +1461,24 @@ def validate_run_args(args: argparse.Namespace, manifest_path: pathlib.Path) -> 
             validate_test_attestation_manifest(manifest_path)
     if args.count is None and not manifest_path.is_file():
         raise SystemExit(f"Manifest not found: {manifest_path}. Pass --count to generate one.")
-    if (args.flash or args.monitor) and not args.port:
-        raise SystemExit("--port required with --flash or --monitor")
+    if args.flash and not args.port:
+        raise SystemExit("--port required with --flash")
 
 
 def should_open_post_flash_monitor(*, should_flash: bool, auto_open: bool, explicit_monitor: bool) -> bool:
     if not should_flash:
         return False
     return explicit_monitor
+
+
+def run_label_generation(args: argparse.Namespace, output_dir: pathlib.Path) -> None:
+    label_commands = build_label_commands(args, output_dir)
+    for command in label_commands:
+        run_command(
+            command,
+            cwd=PROJECT_ROOT,
+            dry_run=args.dry_run,
+        )
 
 
 def run_pipeline(args: argparse.Namespace) -> int:
@@ -1317,12 +1533,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         require_idf=True,
     )))
     if not args.skip_labels:
-        label_commands = build_label_commands(args, output_dir)
-        steps.append(("Generate labels", lambda: [run_command(
-            command,
-            cwd=PROJECT_ROOT,
-            dry_run=args.dry_run,
-        ) for command in label_commands]))
+        steps.append(("Generate labels", lambda: run_label_generation(args, output_dir)))
     if should_flash:
         if args.erase:
             steps.append(("Erase flash", lambda: run_command(

@@ -23,6 +23,9 @@ on:
       - "AGENTS.md"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-light-core:
     runs-on: ubuntu-latest
@@ -62,7 +65,7 @@ jobs:
           path: |
             esp-matter
             .git/modules/esp-matter
-          key: ${{ runner.os }}-esp-matter-submodules-v1-${{ hashFiles('.gitmodules') }}-${{ steps.esp-matter-rev.outputs.sha }}
+          key: ${{ runner.os }}-esp-matter-submodules-v2-${{ steps.esp-matter-rev.outputs.sha }}
 
       - name: Sync submodules
         shell: bash
@@ -96,11 +99,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: esp-matter/connectedhomeip/connectedhomeip/.environment
-          key: ${{ runner.os }}-matter-bootstrap-v2-${{
-            hashFiles('esp-matter/connectedhomeip/connectedhomeip/scripts/setup/**/*.txt',
-            'esp-matter/connectedhomeip/connectedhomeip/scripts/setup/**/*.json',
-            'esp-matter/connectedhomeip/connectedhomeip/BUILD.gn',
-            'esp-matter/install.sh') }}
+          key: ${{ runner.os }}-matter-bootstrap-v3-${{ steps.esp-matter-rev.outputs.sha }}
 
       - name: Bootstrap Matter environment
         shell: bash
@@ -127,8 +126,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /root/.cache/pip
-          key: ${{ runner.os }}-esp-matter-pip-v1-${{
-            hashFiles('esp-matter/requirements.txt') }}
+          key: ${{ runner.os }}-esp-matter-pip-v2-${{ steps.esp-matter-rev.outputs.sha }}
 
       - name: Install repo-local Python deps
         shell: bash
@@ -148,11 +146,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .ccache
-          key: ${{ runner.os }}-light-c6-thread-ccache-v1-${{ github.ref_name }}-${{
-            github.sha }}
+          key: ${{ runner.os }}-light-c6-thread-ccache-v2-${{ steps.esp-matter-rev.outputs.sha }}
           restore-keys: |
-            ${{ runner.os }}-light-c6-thread-ccache-v1-${{ github.ref_name }}-
-            ${{ runner.os }}-light-c6-thread-ccache-v1-
+            ${{ runner.os }}-light-c6-thread-ccache-v2-
 
       - name: Configure base light firmware
         shell: bash
@@ -229,6 +225,8 @@ jobs:
     needs:
       - package-light-core
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
 
     steps:
       - name: Download packaged artifact

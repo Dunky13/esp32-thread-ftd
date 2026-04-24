@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import pathlib
@@ -20,6 +21,9 @@ else:
     from .tool_paths import DEFAULT_DEVICES_CSV_PATH, DEFAULT_LABEL_HTML_PATH
 
 LABEL_BORDER_WIDTH_MM = 0.35
+DEFAULT_LABEL_WIDTH_MM = 10.0
+DEFAULT_LABEL_HEIGHT_MM = 15.0
+LABEL_BUILD_FINGERPRINT_PREFIX = "label-build-fingerprint:"
 
 
 HTML_TEMPLATE = """<!doctype html>
@@ -28,6 +32,7 @@ HTML_TEMPLATE = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Matter Labels</title>
+  <!-- {build_fingerprint_comment} -->
   <style>
     :root {{
       --page-pad: {page_pad_mm}mm;
@@ -553,13 +558,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--label-width-mm",
         type=float,
-        default=10.0,
+        default=DEFAULT_LABEL_WIDTH_MM,
         help="Printed label width in millimeters. Max 10 mm.",
     )
     parser.add_argument(
         "--label-height-mm",
         type=float,
-        default=15.0,
+        default=DEFAULT_LABEL_HEIGHT_MM,
         help="Printed label height in millimeters. Max 15 mm.",
     )
     return parser.parse_args()
@@ -579,9 +584,27 @@ class LayoutMetrics:
 def build_qr_svg_markup(payload: str) -> str:
     segno_module = verify_segno_dependency(sys.executable)
     qr = segno_module.make(payload)
-    output = io.StringIO()
+    output = io.BytesIO()
     qr.save(output, kind="svg", scale=1, border=0, xmldecl=False)
-    return output.getvalue()
+    return output.getvalue().decode("utf-8")
+
+
+def build_label_html_fingerprint(
+    label_rows: list[dict[str, str]],
+    *,
+    label_width_mm: float,
+    label_height_mm: float,
+) -> str:
+    payload = json.dumps(
+        {
+            "label_rows": label_rows,
+            "label_width_mm": label_width_mm,
+            "label_height_mm": label_height_mm,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def compute_layout_metrics(label_width_mm: float, label_height_mm: float) -> LayoutMetrics:
@@ -622,12 +645,18 @@ def main() -> int:
     rows = load_device_rows(devices_csv)
     selected_rows = filter_rows_by_serial(rows, args.serial)
     label_rows = build_label_rows(selected_rows, include_passcode=False)
+    build_fingerprint = build_label_html_fingerprint(
+        label_rows,
+        label_width_mm=args.label_width_mm,
+        label_height_mm=args.label_height_mm,
+    )
     for label_row in label_rows:
         label_row["qr_svg"] = build_qr_svg_markup(label_row["qrcode"])
     layout = compute_layout_metrics(args.label_width_mm, args.label_height_mm)
     json_payload = json.dumps(label_rows).replace("</", "<\\/")
 
     html_output = HTML_TEMPLATE.format(
+        build_fingerprint_comment=f"{LABEL_BUILD_FINGERPRINT_PREFIX}{build_fingerprint}",
         json_payload=json_payload,
         label_width_mm=args.label_width_mm,
         label_height_mm=args.label_height_mm,

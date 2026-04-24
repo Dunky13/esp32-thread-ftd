@@ -618,6 +618,18 @@ class GenerateLabelHtmlTests(unittest.TestCase):
         self.assertAlmostEqual(layout.content_offset_x_mm, 0.0, places=4)
         self.assertAlmostEqual(layout.content_offset_y_mm, 0.175, places=3)
 
+    def test_build_qr_svg_markup_decodes_bytes_output(self) -> None:
+        fake_qr = unittest.mock.Mock()
+        fake_qr.save.side_effect = lambda output, **_: output.write(b"<svg>qr</svg>")
+        fake_segno = unittest.mock.Mock()
+        fake_segno.make.return_value = fake_qr
+
+        with patch.object(generate_label_html, "verify_segno_dependency", return_value=fake_segno):
+            svg_markup = generate_label_html.build_qr_svg_markup("MT:TESTPAYLOAD")
+
+        self.assertEqual(svg_markup, "<svg>qr</svg>")
+        fake_segno.make.assert_called_once_with("MT:TESTPAYLOAD")
+
     def test_main_writes_portrait_label_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = pathlib.Path(temp_dir)
@@ -976,10 +988,7 @@ class LightPipelineTests(unittest.TestCase):
             port=None,
         )
 
-        with self.assertRaises(SystemExit) as context:
-            light_pipeline.validate_run_args(args, manifest_path)
-
-        self.assertIn("--port required with --flash or --monitor", str(context.exception))
+        light_pipeline.validate_run_args(args, manifest_path)
 
     def test_validate_run_args_allows_factory_mode_without_test_attestation(self) -> None:
         manifest_path = pathlib.Path("/tmp/device_manifest.csv")
@@ -1074,7 +1083,7 @@ class LightPipelineTests(unittest.TestCase):
         self.assertEqual(stdout, "esptool.py --chip esp32c6")
         mocked_print.assert_called_once_with("    $ echo ignored")
 
-    def test_run_pipeline_flashes_when_port_present_without_flash_flag(self) -> None:
+    def test_run_pipeline_opens_monitor_by_default_after_flash(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = pathlib.Path(temp_dir)
             manifest_path = temp_root / "device_manifest.csv"
@@ -1092,7 +1101,7 @@ class LightPipelineTests(unittest.TestCase):
                 dac_provider="example",
                 port="/dev/ttyUSB0",
                 flash=False,
-                monitor=False,
+                monitor=True,
                 erase=False,
                 serial="LGT0001",
                 serial_index=1,
@@ -1131,7 +1140,7 @@ class LightPipelineTests(unittest.TestCase):
 
         self.assertTrue(any(len(command) > 1 and command[1].endswith("generate_flash_command.py") for command in recorded_commands))
         self.assertIn(["esptool.py", "--chip", "esp32c6"], recorded_commands)
-        self.assertNotIn(["idf.py", "-B", str(build_dir.resolve()), "-p", "/dev/ttyUSB0", "monitor"], recorded_commands)
+        self.assertIn(["idf.py", "-B", str(build_dir.resolve()), "-p", "/dev/ttyUSB0", "monitor"], recorded_commands)
 
     def test_run_pipeline_generates_attestation_manifest_for_factory_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1188,6 +1197,92 @@ class LightPipelineTests(unittest.TestCase):
             if len(command) > 1 and command[1].endswith("generate_factory_data.py")
         )
         self.assertIn(str(attestation_manifest), factory_command)
+
+    def test_run_pipeline_skips_up_to_date_label_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = pathlib.Path(temp_dir)
+            manifest_path = temp_root / "device_manifest.csv"
+            manifest_path.write_text("serial_num\n", encoding="utf-8")
+            output_dir = temp_root / "out"
+            output_dir.mkdir()
+            devices_csv = output_dir / "devices.csv"
+            devices_csv.write_text(
+                "\n".join(
+                    [
+                        "serial_num,discriminator,passcode,vendor_id,product_id,vendor_name,product_name,factory_bin,factory_csv,onboarding_csv,qrcode,manualcode",
+                        "LGT0001,3840,20202021,0xFFF1,0x8000,Vendor,Product,/tmp/factory.bin,/tmp/factory.csv,/tmp/onboarding.csv,MT:TESTPAYLOAD,12345678901",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            label_output_dir = temp_root / "labels"
+            label_output_dir.mkdir()
+            label_row = light_pipeline.build_label_rows_for_assets(devices_csv)[0]
+            (label_output_dir / "LGT0001.txt").write_text(
+                light_pipeline.build_label_asset_text(label_row),
+                encoding="utf-8",
+            )
+            (label_output_dir / "LGT0001.svg").write_text("<svg>qr</svg>", encoding="utf-8")
+
+            label_html = temp_root / "labels.html"
+            html_rows = fleet_data.build_label_rows(fleet_data.load_device_rows(devices_csv), include_passcode=False)
+            fingerprint = generate_label_html.build_label_html_fingerprint(
+                html_rows,
+                label_width_mm=generate_label_html.DEFAULT_LABEL_WIDTH_MM,
+                label_height_mm=generate_label_html.DEFAULT_LABEL_HEIGHT_MM,
+            )
+            label_html.write_text(
+                f"<!-- {generate_label_html.LABEL_BUILD_FINGERPRINT_PREFIX}{fingerprint} -->\n",
+                encoding="utf-8",
+            )
+
+            build_dir = temp_root / "build"
+            recorded_commands: list[list[str]] = []
+
+            args = Namespace(
+                manifest=str(manifest_path),
+                output_dir=str(output_dir),
+                build_dir=str(build_dir),
+                count=None,
+                use_test_attestation=False,
+                dac_provider="example",
+                port=None,
+                flash=False,
+                monitor=False,
+                erase=False,
+                serial=None,
+                serial_index=1,
+                baud="921600",
+                skip_build=True,
+                skip_labels=False,
+                dry_run=False,
+                vendor_id="0xFFF1",
+                product_id="0x8000",
+                vendor_name="Vendor",
+                product_name="Product",
+                target="esp32c6",
+                label_output_dir=str(label_output_dir),
+                label_html=str(label_html),
+                label_csv=None,
+                render_qr_svg=True,
+                serial_prefix="LGT",
+                start_index=1,
+                serial_width=4,
+                discriminator_start=3840,
+                hw_ver="1",
+                hw_ver_str="1.0",
+                mfg_date=None,
+            )
+
+            with patch.object(light_pipeline, "ensure_example_tree"), patch.object(
+                light_pipeline, "run_command", side_effect=lambda command, **_: recorded_commands.append(command) or ""
+            ):
+                light_pipeline.run_pipeline(args)
+
+        self.assertTrue(any(len(command) > 1 and command[1].endswith("generate_factory_data.py") for command in recorded_commands))
+        self.assertFalse(any(len(command) > 1 and command[1].endswith("generate_label_assets.py") for command in recorded_commands))
+        self.assertFalse(any(len(command) > 1 and command[1].endswith("generate_label_html.py") for command in recorded_commands))
 
     def test_run_pipeline_prints_qr_and_svg_before_monitor(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1278,7 +1373,7 @@ class LightPipelineTests(unittest.TestCase):
         )
         self.assertLess(summary_index, events.index(monitor_event))
 
-    def test_flash_only_keeps_monitor_opt_in(self) -> None:
+    def test_flash_only_skips_monitor_when_explicitly_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = pathlib.Path(temp_dir)
             output_dir = temp_root / "out"
@@ -1375,6 +1470,39 @@ class LightPipelineTests(unittest.TestCase):
                 mocked_run.side_effect = [
                     subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="does not apply"),
                     subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+                ]
+                status = light_pipeline.repo_patch_status(patch_path)
+
+        self.assertEqual(status, "already_applied")
+
+    def test_repo_patch_status_reports_already_applied_when_patch_content_exists_with_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = pathlib.Path(temp_dir)
+            patch_path = temp_root / "fix.patch"
+            patch_path.write_text(
+                "\n".join(
+                    [
+                        "diff --git a/src/example.txt b/src/example.txt",
+                        "--- a/src/example.txt",
+                        "+++ b/src/example.txt",
+                        "@@ -1 +1,2 @@",
+                        " base",
+                        "+added line",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            example_file = temp_root / "esp-matter" / "src" / "example.txt"
+            example_file.parent.mkdir(parents=True)
+            example_file.write_text("prefix\nadded line\nsuffix\n", encoding="utf-8")
+
+            with patch.object(light_pipeline, "ESP_MATTER_ROOT", temp_root / "esp-matter"), patch.object(
+                light_pipeline.subprocess, "run"
+            ) as mocked_run:
+                mocked_run.side_effect = [
+                    subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="does not apply"),
+                    subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="does not apply"),
                 ]
                 status = light_pipeline.repo_patch_status(patch_path)
 
