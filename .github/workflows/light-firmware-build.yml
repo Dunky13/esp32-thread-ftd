@@ -38,8 +38,40 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
-          fetch-depth: 0
+          fetch-depth: 1
+          submodules: false
+
+      - name: Resolve esp-matter revision
+        id: esp-matter-rev
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'sha=%s\n' "$(git rev-parse HEAD:esp-matter)" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore submodule cache
+        id: restore-submodules
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            esp-matter
+            .git/modules/esp-matter
+          key: ${{ runner.os }}-esp-matter-submodules-v1-${{ hashFiles('.gitmodules') }}-${{ steps.esp-matter-rev.outputs.sha }}
+
+      - name: Sync submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git submodule update --init --recursive --jobs 4
+
+      - name: Save submodule cache
+        if: steps.restore-submodules.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            esp-matter
+            .git/modules/esp-matter
+          key: ${{ steps.restore-submodules.outputs.cache-primary-key }}
 
       - name: Install Python native build deps
         shell: bash
@@ -57,7 +89,11 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: esp-matter/connectedhomeip/connectedhomeip/.environment
-          key: ${{ runner.os }}-matter-bootstrap-v2-${{ hashFiles('esp-matter/connectedhomeip/connectedhomeip/scripts/setup/**/*.txt', 'esp-matter/connectedhomeip/connectedhomeip/scripts/setup/**/*.json', 'esp-matter/connectedhomeip/connectedhomeip/BUILD.gn', 'esp-matter/install.sh') }}
+          key: ${{ runner.os }}-matter-bootstrap-v2-${{
+            hashFiles('esp-matter/connectedhomeip/connectedhomeip/scripts/setup/**/*.txt',
+            'esp-matter/connectedhomeip/connectedhomeip/scripts/setup/**/*.json',
+            'esp-matter/connectedhomeip/connectedhomeip/BUILD.gn',
+            'esp-matter/install.sh') }}
 
       - name: Bootstrap Matter environment
         shell: bash
@@ -84,7 +120,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /root/.cache/pip
-          key: ${{ runner.os }}-esp-matter-pip-v1-${{ hashFiles('esp-matter/requirements.txt') }}
+          key: ${{ runner.os }}-esp-matter-pip-v1-${{
+            hashFiles('esp-matter/requirements.txt') }}
 
       - name: Install repo-local Python deps
         shell: bash
@@ -104,7 +141,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .ccache
-          key: ${{ runner.os }}-light-c6-thread-ccache-v1-${{ github.ref_name }}-${{ github.sha }}
+          key: ${{ runner.os }}-light-c6-thread-ccache-v1-${{ github.ref_name }}-${{
+            github.sha }}
           restore-keys: |
             ${{ runner.os }}-light-c6-thread-ccache-v1-${{ github.ref_name }}-
             ${{ runner.os }}-light-c6-thread-ccache-v1-
