@@ -1,6 +1,6 @@
-# ESP32-C6 Matter Light Pipeline
+# ESP32-C6 Full Thread Device Light
 
-Build, provision, label, and flash a Thread-only Matter light on ESP32-C6 with one CLI.
+Build, provision, label, and flash a Full Thread Device (FTD) Thread-only Matter light on ESP32-C6 with one CLI.
 
 Main script: [`tools/light_pipeline.py`](./tools/light_pipeline.py)
 
