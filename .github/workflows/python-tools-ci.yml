@@ -1,0 +1,55 @@
+name: Python Tools CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/python-tools-ci.yml"
+      - "tools/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/python-tools-ci.yml"
+      - "tools/**"
+  workflow_dispatch:
+
+jobs:
+  tools-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install repo-local tool deps
+        run: |
+          python3 -m pip install -r tools/requirements-tools.txt
+
+      - name: Run Python tool tests
+        run: |
+          python3 -m unittest \
+            tools.tests.test_robustness \
+            tools.tests.test_fleet_data_duplicates \
+            tools.tests.test_entrypoints
+
+      - name: Smoke direct script entrypoints
+        run: |
+          python3 tools/run_workflow.py --help
+          python3 tools/generate_label_assets.py --help
+          python3 tools/generate_label_html.py --help
+          python3 tools/light_pipeline.py --help
+
+      - name: Smoke module entrypoints
+        run: |
+          python3 -m tools.run_workflow --help
+          python3 -m tools.generate_label_assets --help
+          python3 -m tools.generate_label_html --help
+          python3 -m tools.light_pipeline --help

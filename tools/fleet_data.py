@@ -97,6 +97,22 @@ def ensure_manifest_columns(columns: list[str]) -> None:
     )
 
 
+def ensure_unique_serial_num(
+    serial_num: str,
+    *,
+    row_index: int,
+    source_name: str,
+    seen_rows: dict[str, int],
+) -> None:
+    first_row = seen_rows.get(serial_num)
+    if first_row is not None:
+        raise SystemExit(
+            f"{source_name} has duplicate serial_num '{serial_num}' on rows "
+            f"{first_row} and {row_index}"
+        )
+    seen_rows[serial_num] = row_index
+
+
 def load_manifest_rows(manifest_path: pathlib.Path) -> list[dict[str, str]]:
     with manifest_path.open(newline="", encoding="utf-8") as manifest_file:
         reader = csv.DictReader(manifest_file)
@@ -105,6 +121,7 @@ def load_manifest_rows(manifest_path: pathlib.Path) -> list[dict[str, str]]:
         ensure_manifest_columns(reader.fieldnames)
 
         rows = []
+        seen_serial_rows: dict[str, int] = {}
         for index, row in enumerate(reader, start=2):
             cleaned = {key: (value or "").strip() for key, value in row.items()}
             if not any(cleaned.values()):
@@ -117,6 +134,12 @@ def load_manifest_rows(manifest_path: pathlib.Path) -> list[dict[str, str]]:
                 raise SystemExit(
                     f"Manifest row {index} missing required values: {', '.join(missing)}"
                 )
+            ensure_unique_serial_num(
+                cleaned["serial_num"],
+                row_index=index,
+                source_name="Manifest",
+                seen_rows=seen_serial_rows,
+            )
             rows.append(cleaned)
 
     if not rows:
@@ -136,6 +159,7 @@ def load_device_rows(devices_csv: pathlib.Path) -> list[dict[str, str]]:
         )
 
         rows = []
+        seen_serial_rows: dict[str, int] = {}
         for index, row in enumerate(reader, start=2):
             cleaned = {key: (value or "").strip() for key, value in row.items()}
             if not any(cleaned.values()):
@@ -146,6 +170,12 @@ def load_device_rows(devices_csv: pathlib.Path) -> list[dict[str, str]]:
                 raise SystemExit(
                     f"Devices CSV row {index} missing required values: {', '.join(missing)}"
                 )
+            ensure_unique_serial_num(
+                cleaned["serial_num"],
+                row_index=index,
+                source_name="Devices CSV",
+                seen_rows=seen_serial_rows,
+            )
             rows.append(cleaned)
 
     if not rows:

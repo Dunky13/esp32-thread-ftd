@@ -12,15 +12,26 @@ import shutil
 import subprocess
 import zipfile
 
-from fleet_data import load_manifest_rows, read_onboarding_codes, write_devices_summary
-from tool_python import resolve_tool_python
-from tool_paths import (
-    CHIP_ROOT,
-    DEFAULT_CHIP_CERT,
-    DEFAULT_FACTORY_GENERATOR,
-    DEFAULT_MANIFEST_PATH,
-    DEFAULT_OUTPUT_DIR,
-)
+if __package__ in (None, ""):
+    from fleet_data import load_manifest_rows, read_onboarding_codes, write_devices_summary
+    from tool_python import resolve_tool_python
+    from tool_paths import (
+        CHIP_ROOT,
+        DEFAULT_CHIP_CERT,
+        DEFAULT_FACTORY_GENERATOR,
+        DEFAULT_MANIFEST_PATH,
+        DEFAULT_OUTPUT_DIR,
+    )
+else:
+    from .fleet_data import load_manifest_rows, read_onboarding_codes, write_devices_summary
+    from .tool_python import resolve_tool_python
+    from .tool_paths import (
+        CHIP_ROOT,
+        DEFAULT_CHIP_CERT,
+        DEFAULT_FACTORY_GENERATOR,
+        DEFAULT_MANIFEST_PATH,
+        DEFAULT_OUTPUT_DIR,
+    )
 
 
 DEFAULT_VENDOR_NAME = "ESP-C6-Matter"

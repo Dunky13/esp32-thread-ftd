@@ -12,17 +12,30 @@ import subprocess
 import cryptography.hazmat.primitives.serialization
 import cryptography.x509
 
-from fleet_data import load_manifest_rows
-from generate_factory_data import (
-    DEFAULT_LIGHT_DEVICE_TYPE,
-    DEFAULT_VENDOR_NAME,
-    DEFAULT_PRODUCT_NAME,
-    format_manifest_hex_u16,
-    generate_test_cd,
-    render_chip_cert_missing_message,
-    resolve_chip_cert_path,
-)
-from tool_paths import CHIP_ROOT, DEFAULT_CHIP_CERT, DEFAULT_MANIFEST_PATH, DEFAULT_OUTPUT_DIR
+if __package__ in (None, ""):
+    from fleet_data import load_manifest_rows
+    from generate_factory_data import (
+        DEFAULT_LIGHT_DEVICE_TYPE,
+        DEFAULT_PRODUCT_NAME,
+        DEFAULT_VENDOR_NAME,
+        format_manifest_hex_u16,
+        generate_test_cd,
+        render_chip_cert_missing_message,
+        resolve_chip_cert_path,
+    )
+    from tool_paths import CHIP_ROOT, DEFAULT_CHIP_CERT, DEFAULT_MANIFEST_PATH, DEFAULT_OUTPUT_DIR
+else:
+    from .fleet_data import load_manifest_rows
+    from .generate_factory_data import (
+        DEFAULT_LIGHT_DEVICE_TYPE,
+        DEFAULT_PRODUCT_NAME,
+        DEFAULT_VENDOR_NAME,
+        format_manifest_hex_u16,
+        generate_test_cd,
+        render_chip_cert_missing_message,
+        resolve_chip_cert_path,
+    )
+    from .tool_paths import CHIP_ROOT, DEFAULT_CHIP_CERT, DEFAULT_MANIFEST_PATH, DEFAULT_OUTPUT_DIR
 
 
 DEFAULT_ATTESTATION_OUTPUT_DIR = DEFAULT_OUTPUT_DIR / "attestation"

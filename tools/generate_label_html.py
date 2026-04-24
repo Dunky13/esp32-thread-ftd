@@ -4,12 +4,20 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import pathlib
+import sys
 from dataclasses import dataclass
 
-from fleet_data import build_label_rows, filter_rows_by_serial, load_device_rows
-from tool_paths import DEFAULT_DEVICES_CSV_PATH, DEFAULT_LABEL_HTML_PATH
+if __package__ in (None, ""):
+    from fleet_data import build_label_rows, filter_rows_by_serial, load_device_rows
+    from generate_label_assets import verify_segno_dependency
+    from tool_paths import DEFAULT_DEVICES_CSV_PATH, DEFAULT_LABEL_HTML_PATH
+else:
+    from .fleet_data import build_label_rows, filter_rows_by_serial, load_device_rows
+    from .generate_label_assets import verify_segno_dependency
+    from .tool_paths import DEFAULT_DEVICES_CSV_PATH, DEFAULT_LABEL_HTML_PATH
 
 LABEL_BORDER_WIDTH_MM = 0.35
 
@@ -159,7 +167,8 @@ HTML_TEMPLATE = """<!doctype html>
     }}
 
     .qr-box canvas,
-    .qr-box img {{
+    .qr-box img,
+    .qr-box svg {{
       width: 100%;
       height: 100%;
       display: block;
@@ -243,7 +252,6 @@ HTML_TEMPLATE = """<!doctype html>
   <main class="sheet" id="sheet"></main>
 
   <script id="label-data" type="application/json">{json_payload}</script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
   <script>
     const labels = JSON.parse(document.getElementById("label-data").textContent);
     const sheet = document.getElementById("sheet");
@@ -265,33 +273,32 @@ HTML_TEMPLATE = """<!doctype html>
       container.replaceChildren(fallback);
     }}
 
-    function renderQr(container, payload) {{
-      if (!window.QRCode) {{
-        renderFallback(container, payload);
+    function renderQr(container, label) {{
+      if (!label.qr_svg) {{
+        renderFallback(container, label.qrcode);
         return;
       }}
+      container.innerHTML = label.qr_svg;
+    }}
 
-      requestAnimationFrame(() => {{
-        const boxSize = Math.max(1, Math.floor(container.getBoundingClientRect().width));
-        const pixelRatio = Math.max(1, Math.ceil(window.devicePixelRatio || 1));
-
-        window.QRCode.toCanvas(payload, {{
-          margin: 0,
-          width: boxSize * pixelRatio,
-          color: {{
-            dark: "#000000",
-            light: "#ffffff"
-          }}
-        }}, (error, canvas) => {{
-          if (error) {{
-            renderFallback(container, payload);
-            return;
-          }}
-
-          canvas.style.width = `${{boxSize}}px`;
-          canvas.style.height = `${{boxSize}}px`;
-          container.replaceChildren(canvas);
-        }});
+    function svgMarkupToImage(svgMarkup) {{
+      return new Promise((resolve, reject) => {{
+        if (!svgMarkup) {{
+          reject(new Error("QR SVG unavailable"));
+          return;
+        }}
+        const blob = new Blob([svgMarkup], {{ type: "image/svg+xml;charset=utf-8" }});
+        const url = URL.createObjectURL(blob);
+        const image = new Image();
+        image.onload = () => {{
+          URL.revokeObjectURL(url);
+          resolve(image);
+        }};
+        image.onerror = () => {{
+          URL.revokeObjectURL(url);
+          reject(new Error("QR SVG failed to load"));
+        }};
+        image.src = url;
       }});
     }}
 
@@ -375,29 +382,6 @@ HTML_TEMPLATE = """<!doctype html>
       }};
     }}
 
-    function qrToCanvas(payload, width) {{
-      return new Promise((resolve, reject) => {{
-        if (!window.QRCode) {{
-          reject(new Error("QRCode renderer unavailable"));
-          return;
-        }}
-        window.QRCode.toCanvas(payload, {{
-          margin: 0,
-          width,
-          color: {{
-            dark: "#000000",
-            light: "#ffffff"
-          }}
-        }}, (error, canvas) => {{
-          if (error) {{
-            reject(error);
-            return;
-          }}
-          resolve(canvas);
-        }});
-      }});
-    }}
-
     async function renderLabelToCanvas(label) {{
       const metrics = computeExportMetrics();
       const canvas = document.createElement("canvas");
@@ -470,13 +454,13 @@ HTML_TEMPLATE = """<!doctype html>
       );
       ctx.fillText(manualText, manualX, manualY);
 
-      const qrCanvas = await qrToCanvas(label.qrcode, metrics.qrSizePx);
+      const qrImage = await svgMarkupToImage(label.qr_svg);
       const qrRegionTop = serialY + serialHeight + metrics.gap;
       const qrRegionBottom = manualY - metrics.gap;
       const qrY = qrRegionTop + Math.max(0, Math.floor((qrRegionBottom - qrRegionTop - metrics.qrSizePx) / 2));
       const qrX = metrics.contentLeftPx + Math.floor((metrics.contentWidthPx - metrics.qrSizePx) / 2);
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(qrCanvas, qrX, qrY, metrics.qrSizePx, metrics.qrSizePx);
+      ctx.drawImage(qrImage, qrX, qrY, metrics.qrSizePx, metrics.qrSizePx);
 
       return canvas;
     }}
@@ -539,7 +523,7 @@ HTML_TEMPLATE = """<!doctype html>
       card.append(content);
       item.append(card, actions);
       sheet.append(item);
-      renderQr(qrBox, label.qrcode);
+      renderQr(qrBox, label);
     }});
   </script>
 </body>
@@ -592,6 +576,14 @@ class LayoutMetrics:
     label_gap_mm: float
 
 
+def build_qr_svg_markup(payload: str) -> str:
+    segno_module = verify_segno_dependency(sys.executable)
+    qr = segno_module.make(payload)
+    output = io.StringIO()
+    qr.save(output, kind="svg", scale=1, border=0, xmldecl=False)
+    return output.getvalue()
+
+
 def compute_layout_metrics(label_width_mm: float, label_height_mm: float) -> LayoutMetrics:
     if label_width_mm <= 0 or label_height_mm <= 0:
         raise SystemExit("Label width and height must be greater than 0.")
@@ -630,6 +622,8 @@ def main() -> int:
     rows = load_device_rows(devices_csv)
     selected_rows = filter_rows_by_serial(rows, args.serial)
     label_rows = build_label_rows(selected_rows, include_passcode=False)
+    for label_row in label_rows:
+        label_row["qr_svg"] = build_qr_svg_markup(label_row["qrcode"])
     layout = compute_layout_metrics(args.label_width_mm, args.label_height_mm)
     json_payload = json.dumps(label_rows).replace("</", "<\\/")
 

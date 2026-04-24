@@ -10,8 +10,12 @@ import pathlib
 import shlex
 import sys
 
-from fleet_data import load_device_rows
-from tool_paths import DEFAULT_BUILD_DIR, DEFAULT_DEVICES_CSV_PATH, DEFAULT_PARTITIONS_CSV
+if __package__ in (None, ""):
+    from fleet_data import load_device_rows
+    from tool_paths import DEFAULT_BUILD_DIR, DEFAULT_DEVICES_CSV_PATH, DEFAULT_PARTITIONS_CSV
+else:
+    from .fleet_data import load_device_rows
+    from .tool_paths import DEFAULT_BUILD_DIR, DEFAULT_DEVICES_CSV_PATH, DEFAULT_PARTITIONS_CSV
 
 
 FLASH_METADATA_REQUIRED_KEYS = (

@@ -528,7 +528,7 @@ class GenerateLabelAssetsTests(unittest.TestCase):
                 "-m",
                 "pip",
                 "install",
-                "segno",
+                generate_label_assets.SEGNO_PIP_SPEC,
             ],
         )
 
@@ -547,7 +547,10 @@ class GenerateLabelAssetsTests(unittest.TestCase):
         message = str(context.exception)
         self.assertIn("Failed to auto-install QR SVG dependency.", message)
         self.assertIn("Python env: /tmp/tool-python", message)
-        self.assertIn("Install command: /tmp/tool-python -m pip install segno", message)
+        self.assertIn(
+            f"Install command: /tmp/tool-python -m pip install {generate_label_assets.SEGNO_PIP_SPEC}",
+            message,
+        )
         self.assertIn("pip exit code: 2", message)
 
     def test_main_renders_svg_when_segno_available(self) -> None:
@@ -621,7 +624,7 @@ class GenerateLabelHtmlTests(unittest.TestCase):
             devices_csv = self.write_devices_csv(temp_root)
             output_path = temp_root / "matter-labels.html"
 
-            with patch.object(
+            with patch.object(generate_label_html, "build_qr_svg_markup", return_value="<svg>qr</svg>"), patch.object(
                 sys,
                 "argv",
                 [
@@ -650,6 +653,9 @@ class GenerateLabelHtmlTests(unittest.TestCase):
             self.assertIn("renderLabelToCanvas", html)
             self.assertIn('canvas.toDataURL("image/png")', html)
             self.assertIn("Download PNG", html)
+            self.assertNotIn("cdn.jsdelivr.net", html)
+            self.assertIn("svgMarkupToImage", html)
+            self.assertIn('"qr_svg":', html)
 
 
 class GenerateDeviceManifestTests(unittest.TestCase):
@@ -1125,7 +1131,7 @@ class LightPipelineTests(unittest.TestCase):
 
         self.assertTrue(any(len(command) > 1 and command[1].endswith("generate_flash_command.py") for command in recorded_commands))
         self.assertIn(["esptool.py", "--chip", "esp32c6"], recorded_commands)
-        self.assertIn(["idf.py", "-B", str(build_dir.resolve()), "-p", "/dev/ttyUSB0", "monitor"], recorded_commands)
+        self.assertNotIn(["idf.py", "-B", str(build_dir.resolve()), "-p", "/dev/ttyUSB0", "monitor"], recorded_commands)
 
     def test_run_pipeline_generates_attestation_manifest_for_factory_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1215,7 +1221,7 @@ class LightPipelineTests(unittest.TestCase):
                 dac_provider="example",
                 port="/dev/ttyUSB0",
                 flash=False,
-                monitor=False,
+                monitor=True,
                 erase=False,
                 serial="LGT0001",
                 serial_index=1,
@@ -1374,7 +1380,27 @@ class LightPipelineTests(unittest.TestCase):
 
         self.assertEqual(status, "already_applied")
 
-    def test_ensure_repo_patches_applied_applies_needed_patches(self) -> None:
+    def test_ensure_repo_patches_applied_reports_needed_patches_without_mutating_submodule(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = pathlib.Path(temp_dir)
+            patch_dir = temp_root / "patches"
+            patch_dir.mkdir()
+            (patch_dir / "fix.patch").write_text("patch", encoding="utf-8")
+
+            with patch.object(light_pipeline, "PATCHES_DIR", patch_dir), patch.object(
+                light_pipeline, "ESP_MATTER_ROOT", temp_root / "esp-matter"
+            ), patch.object(light_pipeline.subprocess, "run") as mocked_run, patch("builtins.print") as mocked_print:
+                mocked_run.side_effect = [
+                    subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+                ]
+                light_pipeline.ensure_repo_patches_applied()
+
+        self.assertEqual(mocked_run.call_count, 1)
+        mocked_print.assert_any_call("    Repo patches available under `patches/` but not auto-applied:")
+        mocked_print.assert_any_call("      - fix.patch")
+        mocked_print.assert_any_call("    Re-run with `--apply-patches` to mutate `esp-matter/`.")
+
+    def test_ensure_repo_patches_applied_applies_needed_patches_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = pathlib.Path(temp_dir)
             patch_dir = temp_root / "patches"
@@ -1388,7 +1414,7 @@ class LightPipelineTests(unittest.TestCase):
                     subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
                     subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
                 ]
-                light_pipeline.ensure_repo_patches_applied()
+                light_pipeline.ensure_repo_patches_applied(apply=True)
 
         self.assertEqual(mocked_run.call_args_list[1].args[0], ["git", "apply", str(patch_dir / "fix.patch")])
         mocked_print.assert_any_call("    Applying repo patch to `esp-matter/`: fix.patch")
@@ -1423,7 +1449,7 @@ class LightPipelineTests(unittest.TestCase):
                 light_pipeline, "ensure_recursive_submodules"
             ), patch.object(
                 light_pipeline, "ensure_repo_patches_applied"
-            ), patch.object(
+            ) as mocked_patches, patch.object(
                 light_pipeline.subprocess, "run"
             ) as mocked_run:
                 env = light_pipeline.ensure_matter_bootstrap({"PATH": "/usr/bin:/bin"})
@@ -1434,6 +1460,7 @@ class LightPipelineTests(unittest.TestCase):
             check=True,
             env=unittest.mock.ANY,
         )
+        mocked_patches.assert_called_once_with(apply=False)
         self.assertIn(str(chip_root / ".environment" / "cipd" / "packages" / "pigweed"), env["PATH"])
         self.assertIn(str(chip_root / "out" / "host"), env["PATH"])
 
@@ -1449,12 +1476,13 @@ class LightPipelineTests(unittest.TestCase):
                 light_pipeline, "ensure_recursive_submodules"
             ), patch.object(
                 light_pipeline, "ensure_repo_patches_applied"
-            ), patch.object(
+            ) as mocked_patches, patch.object(
                 light_pipeline.subprocess, "run"
             ) as mocked_run:
                 env = light_pipeline.ensure_matter_bootstrap({"PATH": "/usr/bin:/bin"})
 
         mocked_run.assert_not_called()
+        mocked_patches.assert_called_once_with(apply=False)
         self.assertIn(str(chip_root / ".environment" / "cipd" / "packages" / "pigweed"), env["PATH"])
         self.assertIn(str(chip_root / "out" / "host"), env["PATH"])
 

@@ -17,34 +17,58 @@ from collections.abc import Callable
 from datetime import datetime
 from types import ModuleType
 
-from detect_env_paths import (
-    choose_idf_candidate,
-    collect_idf_candidates,
-    load_eim_idf_path,
-    version_hint_from_build_dirs,
-)
-from fleet_data import load_device_rows, load_manifest_rows
-import generate_factory_data
-from tool_paths import (
-    CHIP_ROOT,
-    DEFAULT_BUILD_DIR,
-    DEFAULT_LABEL_HTML_PATH,
-    DEFAULT_LABEL_OUTPUT_DIR,
-    DEFAULT_MANIFEST_PATH,
-    DEFAULT_OUTPUT_DIR,
-    DEFAULT_PARTITIONS_CSV,
-    ESP_MATTER_ROOT,
-    EXAMPLE_DIR,
-    PROJECT_ROOT,
-    TOOLS_DIR,
-)
+try:
+    from .detect_env_paths import (
+        choose_idf_candidate,
+        collect_idf_candidates,
+        load_eim_idf_path,
+        version_hint_from_build_dirs,
+    )
+    from .fleet_data import load_device_rows, load_manifest_rows
+    from . import generate_factory_data
+    from .tool_paths import (
+        CHIP_ROOT,
+        DEFAULT_BUILD_DIR,
+        DEFAULT_LABEL_HTML_PATH,
+        DEFAULT_LABEL_OUTPUT_DIR,
+        DEFAULT_MANIFEST_PATH,
+        DEFAULT_OUTPUT_DIR,
+        DEFAULT_PARTITIONS_CSV,
+        ESP_MATTER_ROOT,
+        EXAMPLE_DIR,
+        PROJECT_ROOT,
+        TOOLS_DIR,
+    )
+    from .tool_python import resolve_tool_python
+except ImportError:
+    from detect_env_paths import (
+        choose_idf_candidate,
+        collect_idf_candidates,
+        load_eim_idf_path,
+        version_hint_from_build_dirs,
+    )
+    from fleet_data import load_device_rows, load_manifest_rows
+    import generate_factory_data
+    from tool_paths import (
+        CHIP_ROOT,
+        DEFAULT_BUILD_DIR,
+        DEFAULT_LABEL_HTML_PATH,
+        DEFAULT_LABEL_OUTPUT_DIR,
+        DEFAULT_MANIFEST_PATH,
+        DEFAULT_OUTPUT_DIR,
+        DEFAULT_PARTITIONS_CSV,
+        ESP_MATTER_ROOT,
+        EXAMPLE_DIR,
+        PROJECT_ROOT,
+        TOOLS_DIR,
+    )
+    from tool_python import resolve_tool_python
 
 
 DEFAULT_TARGET = "esp32c6"
 DEFAULT_THREAD_SDKCONFIG = EXAMPLE_DIR / "sdkconfig.defaults.c6_thread"
 DEFAULT_BASE_SDKCONFIG = EXAMPLE_DIR / "sdkconfig.defaults"
 PATCHES_DIR = PROJECT_ROOT / "patches"
-IDF_PYTHON = "python"
 _GIT_SUBMODULE_JOBS_SUPPORTED: bool | None = None
 _EXAMPLE_DAC_VENDOR_IDS = {0xFFF1, 0xFFF2, 0xFFF3}
 _EXAMPLE_DAC_PRODUCT_ID_MIN = 0x8000
@@ -255,6 +279,11 @@ def add_pipeline_arguments(parser: argparse.ArgumentParser) -> None:
         help="Also render QR SVG files. Auto-installs 'segno' when missing.",
     )
     parser.add_argument(
+        "--apply-patches",
+        action="store_true",
+        help="Apply repo patch files under patches/ to esp-matter/ before building.",
+    )
+    parser.add_argument(
         "--skip-build",
         action="store_true",
         help="Skip firmware build and only provision from an existing build directory.",
@@ -462,17 +491,21 @@ def repo_patch_status(patch_path: pathlib.Path) -> str:
     raise SystemExit(message)
 
 
-def ensure_repo_patches_applied() -> None:
+def ensure_repo_patches_applied(*, apply: bool = False) -> None:
     patch_files = list_repo_patch_files()
     if not patch_files:
         return
 
     applied: list[str] = []
     already_applied: list[str] = []
+    pending_apply: list[str] = []
     for patch_path in patch_files:
         status = repo_patch_status(patch_path)
         if status == "already_applied":
             already_applied.append(patch_path.name)
+            continue
+        pending_apply.append(patch_path.name)
+        if not apply:
             continue
 
         print(f"    Applying repo patch to `esp-matter/`: {patch_path.name}")
@@ -496,6 +529,13 @@ def ensure_repo_patches_applied() -> None:
             print(f"      - {patch_name}")
         if len(applied) > 5:
             print(f"      ... and {len(applied) - 5} more")
+    elif pending_apply:
+        print("    Repo patches available under `patches/` but not auto-applied:")
+        for patch_name in pending_apply[:5]:
+            print(f"      - {patch_name}")
+        if len(pending_apply) > 5:
+            print(f"      ... and {len(pending_apply) - 5} more")
+        print("    Re-run with `--apply-patches` to mutate `esp-matter/`.")
     elif already_applied:
         print("    Repo patches already applied in `esp-matter/`.")
 
@@ -812,9 +852,14 @@ def command_requires_matter_bootstrap(command: list[str]) -> bool:
     return any(part in {"set-target", "build", "reconfigure"} for part in command[1:])
 
 
-def ensure_matter_bootstrap(env: dict[str, str], *, dry_run: bool = False) -> dict[str, str]:
+def ensure_matter_bootstrap(
+    env: dict[str, str],
+    *,
+    dry_run: bool = False,
+    apply_repo_patches: bool = False,
+) -> dict[str, str]:
     ensure_recursive_submodules()
-    ensure_repo_patches_applied()
+    ensure_repo_patches_applied(apply=apply_repo_patches)
     prepared_env = build_matter_environment(env)
     if command_exists("gn", prepared_env):
         return prepared_env
@@ -855,6 +900,7 @@ def run_command(
     capture_output: bool = False,
     print_captured_output: bool = True,
     require_idf: bool = False,
+    apply_repo_patches: bool = False,
 ) -> str:
     rendered = quote_command(command)
     print(f"    $ {rendered}")
@@ -867,7 +913,11 @@ def run_command(
             idf_python_env_path, idf_python = detect_idf_python(idf_path)
             env = build_idf_environment(idf_path, idf_python_env_path, idf_python)
             if command_requires_matter_bootstrap(command):
-                env = ensure_matter_bootstrap(env, dry_run=dry_run)
+                env = ensure_matter_bootstrap(
+                    env,
+                    dry_run=dry_run,
+                    apply_repo_patches=apply_repo_patches,
+                )
             else:
                 env = build_matter_environment(env)
             command = prepare_idf_command(command, idf_path=idf_path, idf_python=idf_python)
@@ -1052,7 +1102,7 @@ def build_idf_command(build_dir: pathlib.Path, override_path: pathlib.Path, targ
 
 def build_factory_data_command(args: argparse.Namespace, manifest_path: pathlib.Path, output_dir: pathlib.Path) -> list[str]:
     command = [
-        IDF_PYTHON,
+        resolve_tool_python(),
         str(TOOLS_DIR / "generate_factory_data.py"),
         "--manifest",
         str(manifest_path),
@@ -1141,7 +1191,7 @@ def build_flash_generation_command(
     serial_index: int | None,
 ) -> list[str]:
     command = [
-        IDF_PYTHON,
+        resolve_tool_python(),
         str(TOOLS_DIR / "generate_flash_command.py"),
         "--devices-csv",
         str(output_dir / "devices.csv"),
@@ -1212,7 +1262,7 @@ def validate_run_args(args: argparse.Namespace, manifest_path: pathlib.Path) -> 
 def should_open_post_flash_monitor(*, should_flash: bool, auto_open: bool, explicit_monitor: bool) -> bool:
     if not should_flash:
         return False
-    return auto_open or explicit_monitor
+    return explicit_monitor
 
 
 def run_pipeline(args: argparse.Namespace) -> int:
@@ -1225,7 +1275,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
     should_flash = bool(args.port)
     should_monitor = should_open_post_flash_monitor(
         should_flash=should_flash,
-        auto_open=True,
+        auto_open=False,
         explicit_monitor=args.monitor,
     )
     factory_manifest_path = manifest_path
@@ -1258,6 +1308,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
             cwd=EXAMPLE_DIR,
             dry_run=args.dry_run,
             require_idf=True,
+            apply_repo_patches=getattr(args, "apply_patches", False),
         )))
     steps.append(("Generate factory data and onboarding codes", lambda: run_command(
         build_factory_data_command(args, factory_manifest_path, output_dir),
@@ -1411,7 +1462,7 @@ def flash_only(args: argparse.Namespace) -> int:
 def list_targets(args: argparse.Namespace) -> int:
     output_dir = pathlib.Path(args.output_dir).resolve()
     command = [
-        IDF_PYTHON,
+        resolve_tool_python(),
         str(TOOLS_DIR / "generate_flash_command.py"),
         "--devices-csv",
         str(output_dir / "devices.csv"),
@@ -1421,7 +1472,6 @@ def list_targets(args: argparse.Namespace) -> int:
         command,
         cwd=PROJECT_ROOT,
         dry_run=args.dry_run,
-        require_idf=True,
     )
     return 0
 

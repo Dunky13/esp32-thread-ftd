@@ -8,8 +8,12 @@ import pathlib
 import secrets
 from datetime import date
 
-from fleet_data import load_manifest_rows, write_manifest
-from tool_paths import DEFAULT_MANIFEST_PATH
+if __package__ in (None, ""):
+    from fleet_data import load_manifest_rows, write_manifest
+    from tool_paths import DEFAULT_MANIFEST_PATH
+else:
+    from .fleet_data import load_manifest_rows, write_manifest
+    from .tool_paths import DEFAULT_MANIFEST_PATH
 
 
 INVALID_PASSCODES = {

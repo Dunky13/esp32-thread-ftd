@@ -1,93 +1,44 @@
-# Light Pipeline
+# Tools Docs
 
-User-facing entrypoint: `tools/light_pipeline.py`
+This directory contains implementation scripts.
 
-The pipeline shells into ESP-IDF automatically after it finds `IDF_PATH`. No manual `source export.sh` step needed.
-If Matter tooling such as `gn` is missing, the pipeline also runs CHIP bootstrap automatically before the firmware build step.
-If nested git submodules under `esp-matter/connectedhomeip` are missing, the pipeline also runs `git submodule update --init --recursive` from repo root before the build step.
-If repo patch files exist under top-level `patches/`, the pipeline reports them but does not apply them. `esp-matter/` stays untouched by `light_pipeline.py` execution.
+Main entrypoint:
 
-Target flow:
+- [`light_pipeline.py`](./light_pipeline.py)
 
-- `esp-matter/examples/light`
-- `esp32c6`
-- Wi-Fi disabled
-- Thread enabled
-- custom vendor/product IDs
-- unique passcodes, discriminators, rotating IDs per generated device
+Project docs now live under [`../docs/`](../docs/README.md).
 
-## Steps
+Use docs by topic:
 
-1. Check environment:
+- first setup: [`../docs/getting-started.md`](../docs/getting-started.md)
+- pipeline flow: [`../docs/pipeline.md`](../docs/pipeline.md)
+- VID/PID and attestation: [`../docs/identity-and-attestation.md`](../docs/identity-and-attestation.md)
+- commissioning after flash: [`../docs/commissioning.md`](../docs/commissioning.md)
+- manifest schema: [`../docs/manifest.md`](../docs/manifest.md)
+- CLI options: [`../docs/cli.md`](../docs/cli.md)
+- outputs and labels: [`../docs/outputs.md`](../docs/outputs.md)
+- helper script roles: [`../docs/internal-scripts.md`](../docs/internal-scripts.md)
+- version assumptions: [`../docs/version-compatibility.md`](../docs/version-compatibility.md)
+- security and generated secrets: [`../docs/security-and-generated-secrets.md`](../docs/security-and-generated-secrets.md)
+- maintenance and clean rebuilds: [`../docs/maintenance.md`](../docs/maintenance.md)
+- upstream submodule and repo patches: [`../docs/upstream-and-patches.md`](../docs/upstream-and-patches.md)
+- examples: [`../docs/examples.md`](../docs/examples.md)
+- troubleshooting: [`../docs/troubleshooting.md`](../docs/troubleshooting.md)
 
-```bash
-python3 tools/light_pipeline.py doctor
-```
+Helper scripts in this folder:
 
-2. Run full pipeline:
-
-```bash
-python3 tools/light_pipeline.py run \
-  --count 8 \
-  --vendor-id 0xFFF1 \
-  --product-id 0x8000 \
-  --vendor-name "My Vendor" \
-  --product-name "My Thread Light"
-```
-
-What step 2 does:
-
-1. regenerates manifest with unique pairing data
-2. auto-generates development DAC/PAI/CD assets when `--dac-provider factory` is used without `--use-test-attestation`
-3. builds `examples/light` for ESP32-C6 with Thread on and Wi-Fi off
-4. enables factory-backed commissioning/device info
-5. generates per-device factory partitions
-6. generates `tools/out/devices.csv`
-7. generates text labels and printable HTML labels
-
-3. Flash one generated device:
-
-```bash
-python3 tools/light_pipeline.py flash \
-  --port /dev/ttyUSB0 \
-  --serial-index 1
-```
-
-Or do build + provision + flash in one run:
-
-```bash
-python3 tools/light_pipeline.py run \
-  --count 8 \
-  --vendor-id 0xFFF1 \
-  --product-id 0x8000 \
-  --vendor-name "My Vendor" \
-  --product-name "My Thread Light" \
-  --port /dev/ttyUSB0 \
-  --serial-index 1
-```
-
-When `run` gets `--port`, it flashes automatically. `--flash` remains accepted but no longer needed.
-
-## Notes
-
-- Default DAC mode is `example`. It only works with Matter test VID/PID ranges `0xFFF1-0xFFF3` and `0x8000-0x801F`.
-- If you want custom VID/PID values, use `--dac-provider factory`. The pipeline now generates a development PAA/PAI/DAC chain plus test CD automatically and feeds a sidecar manifest into provisioning.
-- Generated development attestation assets land under `tools/out/attestation/`.
-- If you already have your own DAC/PAI/CD files, you can still run `tools/generate_factory_data.py` directly with a manifest that includes `dac_cert,dac_key,pai_cert,cd`.
-- `--use-test-attestation` is only for factory mode when your VID/PID matches exact CHIP test credentials shipped in `connectedhomeip`.
-- Build output goes to `build/light-c6-thread`.
-- Generated provisioning output goes to `tools/out/`.
-- `generate_factory_data.py` auto-installs missing CHIP setup-payload Python deps into active tool Python env. Use `--no-auto-install-deps` to force fail-fast behavior.
-- `--render-qr-svg` auto-installs `segno` into active tool Python env when missing, renders SVG QR labels, and prints terminal QR + SVG output before opening serial monitor.
-- `tools/run_workflow.py` still works. It now forwards to `light_pipeline.py`.
-
-## Internal Scripts
-
-These still exist, but are internal building blocks now:
-
+- `detect_env_paths.py`
 - `generate_device_manifest.py`
 - `generate_attestation_chain.py`
 - `generate_factory_data.py`
 - `generate_flash_command.py`
 - `generate_label_assets.py`
 - `generate_label_html.py`
+- `run_workflow.py`
+
+For direct CLI usage, each script supports `--help`, for example:
+
+```bash
+python3 tools/light_pipeline.py --help
+python3 tools/generate_factory_data.py --help
+```

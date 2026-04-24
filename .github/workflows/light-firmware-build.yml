@@ -1,0 +1,81 @@
+name: Light Firmware Build
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/light-firmware-build.yml"
+      - "esp-matter/**"
+      - "tools/**"
+      - "docs/**"
+      - "README.md"
+      - "AGENTS.md"
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    paths:
+      - ".github/workflows/light-firmware-build.yml"
+      - "esp-matter/**"
+      - "tools/**"
+      - "docs/**"
+      - "README.md"
+      - "AGENTS.md"
+  workflow_dispatch:
+
+jobs:
+  build-light-core:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.4
+    timeout-minutes: 90
+
+    env:
+      BUILD_DIR: build/light-c6-thread
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install esp-matter dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd esp-matter
+          ./install.sh --ninja-jobs 2
+
+      - name: Build base light firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          . /opt/esp/idf/export.sh
+          . ./esp-matter/export.sh
+          mkdir -p build/light-c6-thread
+          cd esp-matter/examples/light
+          idf.py -B ../../../build/light-c6-thread set-target esp32c6 build
+
+      - name: Package build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/light-core
+          tar -C build -czf dist/light-core/light-c6-thread-build.tar.gz light-c6-thread
+          cp docs/ci-and-releases.md dist/light-core/README-device-specific-build.md
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: light-c6-thread-build
+          path: dist/light-core/*
+          if-no-files-found: error
+
+      - name: Publish GitHub release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/light-core/light-c6-thread-build.tar.gz
+            dist/light-core/README-device-specific-build.md

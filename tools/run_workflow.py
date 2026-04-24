@@ -3,7 +3,13 @@
 
 from __future__ import annotations
 
+import pathlib
 import sys
+
+if __package__ not in (None, ""):
+    tools_dir = pathlib.Path(__file__).resolve().parent
+    if str(tools_dir) not in sys.path:
+        sys.path.insert(0, str(tools_dir))
 
 from light_pipeline import main as light_pipeline_main
 

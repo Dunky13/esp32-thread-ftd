@@ -10,14 +10,27 @@ import sys
 import shlex
 from typing import Any
 
-from fleet_data import (
-    LABEL_FIELDNAMES,
-    build_label_rows,
-    filter_rows_by_serial,
-    load_device_rows,
-    write_csv_rows,
-)
-from tool_paths import DEFAULT_DEVICES_CSV_PATH, DEFAULT_LABEL_OUTPUT_DIR
+if __package__ in (None, ""):
+    from fleet_data import (
+        LABEL_FIELDNAMES,
+        build_label_rows,
+        filter_rows_by_serial,
+        load_device_rows,
+        write_csv_rows,
+    )
+    from tool_paths import DEFAULT_DEVICES_CSV_PATH, DEFAULT_LABEL_OUTPUT_DIR
+else:
+    from .fleet_data import (
+        LABEL_FIELDNAMES,
+        build_label_rows,
+        filter_rows_by_serial,
+        load_device_rows,
+        write_csv_rows,
+    )
+    from .tool_paths import DEFAULT_DEVICES_CSV_PATH, DEFAULT_LABEL_OUTPUT_DIR
+
+
+SEGNO_PIP_SPEC = "segno==1.6.6"
 
 
 def parse_args() -> argparse.Namespace:
@@ -82,7 +95,7 @@ def load_segno_module() -> Any | None:
 def install_segno_dependency(python_executable: str) -> None:
     print(
         "Missing QR SVG dep in tool Python env. "
-        "Installing 'segno' ..."
+        f"Installing '{SEGNO_PIP_SPEC}' ..."
     )
     subprocess.run(
         [
@@ -90,7 +103,7 @@ def install_segno_dependency(python_executable: str) -> None:
             "-m",
             "pip",
             "install",
-            "segno",
+            SEGNO_PIP_SPEC,
         ],
         check=True,
     )
@@ -101,7 +114,7 @@ def verify_segno_dependency(python_executable: str) -> Any:
     if segno_module is not None:
         return segno_module
 
-    install_command = f"{shlex.quote(python_executable)} -m pip install segno"
+    install_command = f"{shlex.quote(python_executable)} -m pip install {SEGNO_PIP_SPEC}"
     try:
         install_segno_dependency(python_executable)
     except subprocess.CalledProcessError as exc:
