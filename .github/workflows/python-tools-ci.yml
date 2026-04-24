@@ -43,6 +43,7 @@ jobs:
       - name: Smoke direct script entrypoints
         run: |
           python3 tools/run_workflow.py --help
+          python3 tools/generate_attestation_chain.py --help
           python3 tools/generate_label_assets.py --help
           python3 tools/generate_label_html.py --help
           python3 tools/light_pipeline.py --help
@@ -50,6 +51,7 @@ jobs:
       - name: Smoke module entrypoints
         run: |
           python3 -m tools.run_workflow --help
+          python3 -m tools.generate_attestation_chain --help
           python3 -m tools.generate_label_assets --help
           python3 -m tools.generate_label_html --help
           python3 -m tools.light_pipeline --help
