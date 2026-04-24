@@ -40,22 +40,125 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install esp-matter dependencies
+      - name: Install Python native build deps
         shell: bash
         run: |
           set -euo pipefail
-          cd esp-matter
-          ./install.sh --ninja-jobs 2
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libffi-dev \
+            pkg-config \
+            python3-dev
+          rm -rf /var/lib/apt/lists/*
 
-      - name: Build base light firmware
+      - name: Restore Matter bootstrap cache
+        id: restore-matter-bootstrap
+        uses: actions/cache/restore@v4
+        with:
+          path: esp-matter/connectedhomeip/connectedhomeip/.environment
+          key: ${{ runner.os }}-matter-bootstrap-v2-${{ hashFiles('esp-matter/connectedhomeip/connectedhomeip/scripts/setup/**/*.txt', 'esp-matter/connectedhomeip/connectedhomeip/scripts/setup/**/*.json', 'esp-matter/connectedhomeip/connectedhomeip/BUILD.gn', 'esp-matter/install.sh') }}
+
+      - name: Bootstrap Matter environment
         shell: bash
+        run: |
+          set -euo pipefail
+          cd esp-matter/connectedhomeip/connectedhomeip
+          source scripts/bootstrap.sh -p all,esp32
+          if declare -F deactivate >/dev/null; then
+            deactivate
+          fi
+
+      - name: Save Matter bootstrap cache
+        if: steps.restore-matter-bootstrap.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: esp-matter/connectedhomeip/connectedhomeip/.environment
+          key: ${{ steps.restore-matter-bootstrap.outputs.cache-primary-key }}
+
+      - name: Restore pip cache
+        id: restore-pip
+        uses: actions/cache/restore@v4
+        with:
+          path: /root/.cache/pip
+          key: ${{ runner.os }}-esp-matter-pip-v1-${{ hashFiles('esp-matter/requirements.txt') }}
+
+      - name: Install repo-local Python deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install -r esp-matter/requirements.txt
+
+      - name: Save pip cache
+        if: steps.restore-pip.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /root/.cache/pip
+          key: ${{ steps.restore-pip.outputs.cache-primary-key }}
+
+      - name: Restore compiler cache
+        id: restore-ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-light-c6-thread-ccache-v1-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-light-c6-thread-ccache-v1-${{ github.ref_name }}-
+            ${{ runner.os }}-light-c6-thread-ccache-v1-
+
+      - name: Configure base light firmware
+        shell: bash
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          IDF_CCACHE_ENABLE: "1"
         run: |
           set -euo pipefail
           . /opt/esp/idf/export.sh
           . ./esp-matter/export.sh
-          mkdir -p build/light-c6-thread
+          mkdir -p "${BUILD_DIR}"
           cd esp-matter/examples/light
-          idf.py -B ../../../build/light-c6-thread set-target esp32c6 build
+          idf.py -B "../../../${BUILD_DIR}" set-target esp32c6
+
+      - name: Build base light firmware
+        shell: bash
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          IDF_CCACHE_ENABLE: "1"
+        run: |
+          set -euo pipefail
+          . /opt/esp/idf/export.sh
+          . ./esp-matter/export.sh
+          cd esp-matter/examples/light
+          idf.py -B "../../../${BUILD_DIR}" build
+
+      - name: Save compiler cache
+        if: always() && steps.restore-ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ${{ steps.restore-ccache.outputs.cache-primary-key }}
+
+      - name: Upload raw build tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: light-c6-thread-build-tree
+          path: build/light-c6-thread
+          if-no-files-found: error
+          compression-level: 0
+
+  package-light-core:
+    runs-on: ubuntu-latest
+    needs:
+      - build-light-core
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download raw build tree
+        uses: actions/download-artifact@v4
+        with:
+          name: light-c6-thread-build-tree
+          path: build/light-c6-thread
 
       - name: Package build artifacts
         shell: bash
@@ -65,15 +168,27 @@ jobs:
           tar -C build -czf dist/light-core/light-c6-thread-build.tar.gz light-c6-thread
           cp docs/ci-and-releases.md dist/light-core/README-device-specific-build.md
 
-      - name: Upload build artifact
+      - name: Upload packaged artifact
         uses: actions/upload-artifact@v4
         with:
           name: light-c6-thread-build
           path: dist/light-core/*
           if-no-files-found: error
 
+  publish-light-core-release:
+    runs-on: ubuntu-latest
+    needs:
+      - package-light-core
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download packaged artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: light-c6-thread-build
+          path: dist/light-core
+
       - name: Publish GitHub release assets
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
