@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from ui.services import workspace_store
-from ui.services.release_bundle import import_release_tarball
+from ui.services.release_bundle import import_release_tarball, is_supported_tarball
 
 
 def write_tar(path: Path, members: dict[str, bytes]) -> None:
@@ -20,6 +20,12 @@ def write_tar(path: Path, members: dict[str, bytes]) -> None:
 
 
 class ReleaseBundleTests(unittest.TestCase):
+    def test_tarball_extension_filter_accepts_release_formats(self) -> None:
+        self.assertTrue(is_supported_tarball(Path("release.tar")))
+        self.assertTrue(is_supported_tarball(Path("release.tar.gz")))
+        self.assertTrue(is_supported_tarball(Path("release.tgz")))
+        self.assertFalse(is_supported_tarball(Path("release.gz")))
+
     def test_rejects_path_traversal_member(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -55,4 +61,3 @@ class ReleaseBundleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

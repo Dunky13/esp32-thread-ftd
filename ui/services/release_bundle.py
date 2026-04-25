@@ -18,6 +18,11 @@ class ReleaseBundle:
     provisioning_supported: bool
 
 
+def is_supported_tarball(path: Path) -> bool:
+    name = path.name.lower()
+    return name.endswith((".tar", ".tar.gz", ".tgz"))
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as file:
@@ -47,7 +52,7 @@ def _find_first(root: Path, filename: str) -> Path | None:
 
 def import_release_tarball(workspace: Workspace, tarball_path: str | Path) -> ReleaseBundle:
     source = Path(tarball_path).expanduser().resolve()
-    if source.suffix not in {".tar", ".gz", ".tgz"} and not source.name.endswith(".tar.gz"):
+    if not is_supported_tarball(source):
         raise ValueError("Release bundle must be .tar, .tar.gz, or .tgz")
     if not source.is_file():
         raise FileNotFoundError(f"Release tarball not found: {source}")

@@ -127,16 +127,25 @@ button {{
 button.secondary {{ background: white; color: var(--ink); border-color: var(--line); }}
 .actions {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }}
 .actions > * {{ width: auto; }}
-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
-th, td {{ border-bottom: 1px solid var(--line); padding: 9px; text-align: left; vertical-align: top; }}
-code {{ overflow-wrap: anywhere; }}
+.device-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 12px; }}
+.device-card {{ border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }}
+.device-card-head {{ display: flex; gap: 10px; align-items: center; justify-content: space-between; min-width: 0; }}
+.pick-row {{ display: flex; grid-template-columns: none; flex-direction: row; align-items: center; gap: 8px; min-width: 0; color: var(--ink); }}
+.pick-row input {{ width: auto; min-height: auto; }}
+.pick-row strong {{ overflow-wrap: anywhere; }}
+.device-meta {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0 0; }}
+.device-meta div {{ min-width: 0; }}
+.device-meta .wide {{ grid-column: 1 / -1; }}
+.device-meta dt {{ color: var(--muted); font-size: 12px; margin-bottom: 3px; }}
+.device-meta dd {{ margin: 0; min-width: 0; }}
+code {{ display: inline-block; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }}
 .muted {{ color: var(--muted); }}
 .badge {{ border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--ok); }}
 .notice {{ border-left: 4px solid var(--warn); padding: 10px 12px; background: #fff7ed; }}
 pre {{ max-height: 360px; overflow: auto; padding: 12px; background: #111827; color: #d1fae5; border-radius: 8px; }}
 iframe {{ width: 100%; min-height: 420px; border: 1px solid var(--line); border-radius: 8px; background: white; }}
 @media (max-width: 720px) {{
-  table {{ display: block; overflow-x: auto; }}
+  .device-meta {{ grid-template-columns: 1fr; }}
   .actions > * {{ width: 100%; }}
 }}
 </style>
@@ -197,7 +206,7 @@ def render_home(query: dict[str, list[str]], notice: str = "") -> bytes:
   <h2>Release Bundle</h2>
   <p class="muted">{html.escape(bundle_text)}</p>
   <form method="post" action="/import?workspace={html.escape(workspace_id)}" enctype="multipart/form-data">
-    <label>Tarball<input type="file" name="tarball" accept=".tar,.tar.gz,.tgz"></label>
+    <label>Tarball<input type="file" name="tarball" accept=".tar,.tar.gz,.tgz,application/gzip,application/x-tar"></label>
     <div class="actions"><button {"disabled" if not workspace else ""}>Import tarball</button></div>
   </form>
 </section>
@@ -233,10 +242,7 @@ def render_home(query: dict[str, list[str]], notice: str = "") -> bytes:
 <section>
   <h2>Generated Devices</h2>
   <form method="post" action="/flash?workspace={html.escape(workspace_id)}">
-    <table>
-      <thead><tr><th></th><th>Serial</th><th>VID / PID</th><th>Manual code</th><th>QR payload</th><th>Status</th></tr></thead>
-      <tbody>{render_device_rows(devices, selected_serial)}</tbody>
-    </table>
+    <div class="device-grid">{render_device_rows(devices, selected_serial)}</div>
     <div class="grid">
       <label>Serial port<select name="port">{render_port_options(ports, selected_port)}</select></label>
       <label>Options<span><input type="checkbox" name="erase" value="1"> Erase first</span><span><input type="checkbox" name="monitor" value="1"> Monitor after flash</span></label>
