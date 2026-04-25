@@ -12,7 +12,8 @@ This repo ships two GitHub workflows:
 The firmware workflow builds:
 
 - `build/light-c6-thread/`
-- all standard ESP-IDF build outputs under that directory
+- `flasher_args.json` and the firmware binaries referenced by it
+- `provisioning-support/connectedhomeip/`
 - a release tarball: `light-c6-thread-build.tar.gz`
 
 This is a base firmware build, not a per-device commissioned release bundle.
@@ -29,7 +30,11 @@ Those are intentionally generated later from `tools/`.
 ## How To Use Released Core Build
 
 1. Download `light-c6-thread-build.tar.gz` from GitHub Actions artifacts or the GitHub Release page.
-2. Extract it under repo root so the build tree ends up at `build/light-c6-thread/`.
+2. Extract it under repo root so you get:
+
+- `build/light-c6-thread/`
+- `provisioning-support/connectedhomeip/`
+
 3. Generate device-specific data:
 
 ```bash
@@ -59,9 +64,13 @@ This split keeps CI artifacts reusable:
 - firmware build only needs source + toolchain
 - per-device provisioning stays local and reproducible
 - users do not need to rebuild the full firmware for every manufactured device
+- `run --skip-build` can provision from the extracted bundle without initializing git submodules first
 
 ## Notes
 
-- `run --port` flashes automatically, but monitor stays opt-in with `--monitor`.
+- `run --skip-build` can reuse `provisioning-support/connectedhomeip` from the release bundle when `esp-matter/` is not checked out.
+- direct flashing still works from the extracted build tree because it uses generated `esptool.py` commands.
+- `--erase` and serial monitor still require the full `esp-matter/examples/light` checkout.
+- factory-mode custom attestation may still need a working `chip-cert` binary if you generate your own DAC/PAI/CD assets.
 - repo patches under `patches/` stay non-mutating by default; use `--apply-patches` if you explicitly need them applied before build.
 - `tools/device_manifest.csv` reuse remains default when present. Delete it or change `--manifest` path if you want a fresh manifest.

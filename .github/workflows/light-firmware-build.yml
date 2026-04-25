@@ -175,6 +175,59 @@ jobs:
           cd esp-matter/examples/light
           idf.py -B "../../../${BUILD_DIR}" build
 
+      - name: Prepare provisioning support bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHIP_ROOT="esp-matter/connectedhomeip/connectedhomeip"
+          BUNDLE_ROOT="provisioning-support/connectedhomeip"
+          mkdir -p "${BUNDLE_ROOT}/scripts/tools"
+          mkdir -p "${BUNDLE_ROOT}/scripts/setup"
+          mkdir -p "${BUNDLE_ROOT}/src/setup_payload"
+          mkdir -p "${BUNDLE_ROOT}/credentials/test"
+          cp "${CHIP_ROOT}/scripts/tools/generate_esp32_chip_factory_bin.py" "${BUNDLE_ROOT}/scripts/tools/"
+          cp -R "${CHIP_ROOT}/scripts/tools/spake2p" "${BUNDLE_ROOT}/scripts/tools/"
+          cp "${CHIP_ROOT}/scripts/setup/requirements.setuppayload.txt" "${BUNDLE_ROOT}/scripts/setup/"
+          cp -R "${CHIP_ROOT}/src/setup_payload/python" "${BUNDLE_ROOT}/src/setup_payload/"
+          cp -R "${CHIP_ROOT}/credentials/test/attestation" "${BUNDLE_ROOT}/credentials/test/"
+          cp -R "${CHIP_ROOT}/credentials/test/certification-declaration" "${BUNDLE_ROOT}/credentials/test/"
+          if [ -f "${CHIP_ROOT}/out/host/chip-cert" ]; then
+            mkdir -p "${BUNDLE_ROOT}/out/host"
+            cp "${CHIP_ROOT}/out/host/chip-cert" "${BUNDLE_ROOT}/out/host/"
+          fi
+
+      - name: Prepare flashable firmware bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import shutil
+
+          build_dir = pathlib.Path("build/light-c6-thread")
+          bundle_dir = pathlib.Path("release-bundle") / build_dir
+          bundle_dir.mkdir(parents=True, exist_ok=True)
+
+          flasher_args_path = build_dir / "flasher_args.json"
+          with flasher_args_path.open(encoding="utf-8") as flasher_args_file:
+              flasher_args = json.load(flasher_args_file)
+
+          shutil.copy2(flasher_args_path, bundle_dir / "flasher_args.json")
+          for relative_path in flasher_args["flash_files"].values():
+              source = pathlib.PurePosixPath(relative_path)
+              if source.is_absolute() or ".." in source.parts:
+                  raise SystemExit(f"Unsafe flash file path: {relative_path}")
+              source_path = build_dir / pathlib.Path(*source.parts)
+              target_path = bundle_dir / pathlib.Path(*source.parts)
+              if not source_path.is_file():
+                  raise SystemExit(f"Missing flash file: {source_path}")
+              target_path.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source_path, target_path)
+          PY
+          mkdir -p dist/light-core-input
+          tar -C release-bundle -cf dist/light-core-input/light-c6-thread-firmware-bundle.tar build/light-c6-thread
+
       - name: Save compiler cache
         if: always() && steps.restore-ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -182,11 +235,19 @@ jobs:
           path: .ccache
           key: ${{ steps.restore-ccache.outputs.cache-primary-key }}
 
-      - name: Upload raw build tree
+      - name: Upload flashable firmware bundle
         uses: actions/upload-artifact@v4
         with:
-          name: light-c6-thread-build-tree
-          path: build/light-c6-thread
+          name: light-c6-thread-firmware-bundle
+          path: dist/light-core-input/light-c6-thread-firmware-bundle.tar
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload provisioning support bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: light-c6-thread-provisioning-support
+          path: provisioning-support
           if-no-files-found: error
           compression-level: 0
 
@@ -199,18 +260,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download raw build tree
+      - name: Download flashable firmware bundle
         uses: actions/download-artifact@v4
         with:
-          name: light-c6-thread-build-tree
-          path: build/light-c6-thread
+          name: light-c6-thread-firmware-bundle
+          path: dist/light-core-input
+
+      - name: Download provisioning support bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: light-c6-thread-provisioning-support
+          path: .
 
       - name: Package build artifacts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/light-core
-          tar -C build -czf dist/light-core/light-c6-thread-build.tar.gz light-c6-thread
+          tar -xf dist/light-core-input/light-c6-thread-firmware-bundle.tar
+          tar -czf dist/light-core/light-c6-thread-build.tar.gz build/light-c6-thread provisioning-support
           cp docs/ci-and-releases.md dist/light-core/README-device-specific-build.md
 
       - name: Upload packaged artifact
