@@ -307,6 +307,7 @@ class GenerateAttestationChainTests(unittest.TestCase):
                     rows=rows,
                     output_dir=temp_root / "attestation",
                     chip_cert_path=temp_root / "chip-cert",
+                    chip_root=temp_root / "connectedhomeip",
                     vendor_name="Vendor",
                     product_name="Product",
                     valid_from="2021-06-28 14:23:43",
@@ -1028,6 +1029,7 @@ class LightPipelineTests(unittest.TestCase):
 
         self.assertIn("bad pair", str(context.exception))
         mocked_validate.assert_called_once_with(
+            chip_root=unittest.mock.ANY,
             vendor_id="0x1234",
             product_id="0x5678",
         )
@@ -1061,6 +1063,7 @@ class LightPipelineTests(unittest.TestCase):
 
         self.assertIn("Manifest row 2: bad pair", str(context.exception))
         mocked_validate.assert_called_once_with(
+            chip_root=unittest.mock.ANY,
             vendor_id="0x1234",
             product_id="0x5678",
         )
@@ -1133,7 +1136,9 @@ class LightPipelineTests(unittest.TestCase):
                     return "esptool.py --chip esp32c6"
                 return ""
 
-            with patch.object(light_pipeline, "ensure_example_tree"), patch.object(
+            with patch.object(light_pipeline, "resolve_chip_root", return_value=temp_root / "connectedhomeip"), patch.object(
+                light_pipeline, "require_example_tree_for_flash_features"
+            ), patch.object(
                 light_pipeline, "run_command", side_effect=fake_run_command
             ):
                 light_pipeline.run_pipeline(args)
@@ -1185,7 +1190,7 @@ class LightPipelineTests(unittest.TestCase):
                 mfg_date=None,
             )
 
-            with patch.object(light_pipeline, "ensure_example_tree"), patch.object(
+            with patch.object(light_pipeline, "resolve_chip_root", return_value=temp_root / "connectedhomeip"), patch.object(
                 light_pipeline, "run_command", side_effect=lambda command, **_: recorded_commands.append(command) or ""
             ):
                 light_pipeline.run_pipeline(args)
@@ -1197,6 +1202,64 @@ class LightPipelineTests(unittest.TestCase):
             if len(command) > 1 and command[1].endswith("generate_factory_data.py")
         )
         self.assertIn(str(attestation_manifest), factory_command)
+
+    def test_run_pipeline_skip_build_uses_provisioning_bundle_when_example_tree_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = pathlib.Path(temp_dir)
+            manifest_path = temp_root / "device_manifest.csv"
+            manifest_path.write_text("serial_num\n", encoding="utf-8")
+            output_dir = temp_root / "out"
+            build_dir = temp_root / "build"
+            chip_root = temp_root / "provisioning-support" / "connectedhomeip"
+            chip_root.mkdir(parents=True)
+            recorded_commands: list[list[str]] = []
+
+            args = Namespace(
+                manifest=str(manifest_path),
+                output_dir=str(output_dir),
+                build_dir=str(build_dir),
+                count=None,
+                use_test_attestation=False,
+                dac_provider="example",
+                port=None,
+                flash=False,
+                monitor=False,
+                erase=False,
+                serial=None,
+                serial_index=1,
+                baud="921600",
+                skip_build=True,
+                skip_labels=True,
+                dry_run=False,
+                vendor_id="0xFFF1",
+                product_id="0x8000",
+                vendor_name="Vendor",
+                product_name="Product",
+                target="esp32c6",
+                label_output_dir=str(temp_root / "labels"),
+                label_html=str(temp_root / "labels.html"),
+                label_csv=None,
+                render_qr_svg=False,
+                serial_prefix="LGT",
+                start_index=1,
+                serial_width=4,
+                discriminator_start=3840,
+                hw_ver="1",
+                hw_ver_str="1.0",
+                mfg_date=None,
+            )
+
+            with patch.object(light_pipeline, "resolve_chip_root", return_value=chip_root), patch.object(
+                light_pipeline, "run_command", side_effect=lambda command, **_: recorded_commands.append(command) or ""
+            ):
+                light_pipeline.run_pipeline(args)
+
+        factory_command = next(
+            command for command in recorded_commands
+            if len(command) > 1 and command[1].endswith("generate_factory_data.py")
+        )
+        self.assertIn("--chip-root", factory_command)
+        self.assertIn(str(chip_root), factory_command)
 
     def test_run_pipeline_skips_up_to_date_label_generation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1275,7 +1338,7 @@ class LightPipelineTests(unittest.TestCase):
                 mfg_date=None,
             )
 
-            with patch.object(light_pipeline, "ensure_example_tree"), patch.object(
+            with patch.object(light_pipeline, "resolve_chip_root", return_value=temp_root / "connectedhomeip"), patch.object(
                 light_pipeline, "run_command", side_effect=lambda command, **_: recorded_commands.append(command) or ""
             ):
                 light_pipeline.run_pipeline(args)
@@ -1352,7 +1415,9 @@ class LightPipelineTests(unittest.TestCase):
                 if args:
                     events.append(("print", args[0]))
 
-            with patch.object(light_pipeline, "ensure_example_tree"), patch.object(
+            with patch.object(light_pipeline, "resolve_chip_root", return_value=temp_root / "connectedhomeip"), patch.object(
+                light_pipeline, "require_example_tree_for_flash_features"
+            ), patch.object(
                 light_pipeline, "run_command", side_effect=fake_run_command
             ), patch.object(
                 light_pipeline, "print_qr_codes_to_terminal",
@@ -1407,6 +1472,60 @@ class LightPipelineTests(unittest.TestCase):
         self.assertIn(["esptool.py", "--chip", "esp32c6"], recorded_commands)
         self.assertNotIn(["idf.py", "-B", str(build_dir.resolve()), "-p", "/dev/ttyUSB0", "monitor"], recorded_commands)
 
+    def test_flash_only_allows_flash_without_example_tree_when_monitor_and_erase_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = pathlib.Path(temp_dir)
+            output_dir = temp_root / "out"
+            build_dir = temp_root / "build"
+            recorded_commands: list[list[str]] = []
+
+            args = Namespace(
+                output_dir=str(output_dir),
+                build_dir=str(build_dir),
+                port="/dev/ttyUSB0",
+                erase=False,
+                serial="LGT0001",
+                serial_index=1,
+                baud="921600",
+                dry_run=False,
+                monitor=False,
+            )
+
+            def fake_run_command(command: list[str], **_: object) -> str:
+                recorded_commands.append(command)
+                if len(command) > 1 and command[1].endswith("generate_flash_command.py"):
+                    return "esptool.py --chip esp32c6"
+                return ""
+
+            with patch.object(light_pipeline, "EXAMPLE_DIR", temp_root / "missing-example"), patch.object(
+                light_pipeline, "ESP_MATTER_ROOT", temp_root / "missing-esp"
+            ), patch.object(light_pipeline, "run_command", side_effect=fake_run_command):
+                light_pipeline.flash_only(args)
+
+        self.assertTrue(any(len(command) > 1 and command[1].endswith("generate_flash_command.py") for command in recorded_commands))
+        self.assertIn(["esptool.py", "--chip", "esp32c6"], recorded_commands)
+
+    def test_flash_only_rejects_monitor_without_example_tree(self) -> None:
+        args = Namespace(
+            output_dir="/tmp/out",
+            build_dir="/tmp/build",
+            port="/dev/ttyUSB0",
+            erase=False,
+            serial="LGT0001",
+            serial_index=1,
+            baud="921600",
+            dry_run=False,
+            monitor=True,
+        )
+
+        with patch.object(light_pipeline, "EXAMPLE_DIR", pathlib.Path("/tmp/missing-example")), patch.object(
+            light_pipeline, "ESP_MATTER_ROOT", pathlib.Path("/tmp/missing-esp")
+        ):
+            with self.assertRaises(SystemExit) as context:
+                light_pipeline.flash_only(args)
+
+        self.assertIn("Serial monitor requires the esp-matter example checkout", str(context.exception))
+
     def test_apply_idf_exports_expands_path_placeholder(self) -> None:
         env = light_pipeline.apply_idf_exports(
             {"PATH": "/usr/bin:/bin", "IDF_PATH": "/old"},
@@ -1429,7 +1548,7 @@ class LightPipelineTests(unittest.TestCase):
             chip_root = esp_matter_root / "connectedhomeip" / "connectedhomeip"
 
             with patch.object(light_pipeline, "ESP_MATTER_ROOT", esp_matter_root), patch.object(
-                light_pipeline, "CHIP_ROOT", chip_root
+                light_pipeline, "resolve_chip_root", return_value=chip_root
             ):
                 env = light_pipeline.build_matter_environment({"PATH": "/usr/bin:/bin"})
 
@@ -1574,6 +1693,8 @@ class LightPipelineTests(unittest.TestCase):
             with patch.object(light_pipeline, "ESP_MATTER_ROOT", esp_matter_root), patch.object(
                 light_pipeline, "CHIP_ROOT", chip_root
             ), patch.object(light_pipeline.shutil, "which", side_effect=which_calls), patch.object(
+                light_pipeline, "resolve_chip_root", return_value=chip_root
+            ), patch.object(
                 light_pipeline, "ensure_recursive_submodules"
             ), patch.object(
                 light_pipeline, "ensure_repo_patches_applied"
@@ -1601,6 +1722,8 @@ class LightPipelineTests(unittest.TestCase):
             with patch.object(light_pipeline, "ESP_MATTER_ROOT", esp_matter_root), patch.object(
                 light_pipeline, "CHIP_ROOT", chip_root
             ), patch.object(light_pipeline.shutil, "which", return_value="/tmp/gn"), patch.object(
+                light_pipeline, "resolve_chip_root", return_value=chip_root
+            ), patch.object(
                 light_pipeline, "ensure_recursive_submodules"
             ), patch.object(
                 light_pipeline, "ensure_repo_patches_applied"

@@ -23,7 +23,12 @@ if __package__ in (None, ""):
         render_chip_cert_missing_message,
         resolve_chip_cert_path,
     )
-    from tool_paths import CHIP_ROOT, DEFAULT_CHIP_CERT, DEFAULT_MANIFEST_PATH, DEFAULT_OUTPUT_DIR
+    from tool_paths import (
+        DEFAULT_MANIFEST_PATH,
+        DEFAULT_OUTPUT_DIR,
+        resolve_chip_root,
+        resolve_default_chip_cert_path,
+    )
 else:
     from .fleet_data import load_manifest_rows
     from .generate_factory_data import (
@@ -35,7 +40,12 @@ else:
         render_chip_cert_missing_message,
         resolve_chip_cert_path,
     )
-    from .tool_paths import CHIP_ROOT, DEFAULT_CHIP_CERT, DEFAULT_MANIFEST_PATH, DEFAULT_OUTPUT_DIR
+    from .tool_paths import (
+        DEFAULT_MANIFEST_PATH,
+        DEFAULT_OUTPUT_DIR,
+        resolve_chip_root,
+        resolve_default_chip_cert_path,
+    )
 
 
 DEFAULT_ATTESTATION_OUTPUT_DIR = DEFAULT_OUTPUT_DIR / "attestation"
@@ -46,6 +56,7 @@ ATTESTATION_FIELDNAMES = ("dac_cert", "dac_key", "pai_cert", "cd")
 
 
 def parse_args() -> argparse.Namespace:
+    chip_root = resolve_chip_root()
     parser = argparse.ArgumentParser(
         description="Generate development PAA/PAI/DAC/CD assets for manifest rows.",
     )
@@ -66,8 +77,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--chip-cert",
-        default=str(DEFAULT_CHIP_CERT),
+        default=str(resolve_default_chip_cert_path(chip_root=chip_root)),
         help="Path to CHIP host chip-cert tool.",
+    )
+    parser.add_argument(
+        "--chip-root",
+        default=str(chip_root),
+        help="Path to connectedhomeip root used for test attestation assets.",
     )
     parser.add_argument(
         "--vendor-name",
@@ -173,6 +189,7 @@ def generate_attestation_certificate(
 def generate_pair_attestation_bundle(
     *,
     chip_cert_path: pathlib.Path,
+    chip_root: pathlib.Path,
     output_dir: pathlib.Path,
     vendor_id_hex: str,
     product_id_hex: str,
@@ -224,7 +241,7 @@ def generate_pair_attestation_bundle(
         "pai_cert_der": convert_cert_pem_to_der(pai_cert_pem, pair_dir / "pai_cert.der"),
         "cd": generate_test_cd(
             chip_cert=chip_cert_path,
-            chip_root=CHIP_ROOT,
+            chip_root=chip_root,
             output_path=pair_dir / f"Chip-Test-CD-{vendor_id_hex}-{product_id_hex}.der",
             vendor_id_hex=vendor_id_hex,
             product_id_hex=product_id_hex,
@@ -316,6 +333,7 @@ def augment_rows_with_attestation_paths(
     rows: list[dict[str, str]],
     output_dir: pathlib.Path,
     chip_cert_path: pathlib.Path,
+    chip_root: pathlib.Path,
     vendor_name: str,
     product_name: str,
     valid_from: str,
@@ -332,6 +350,7 @@ def augment_rows_with_attestation_paths(
         if pair not in pair_bundles:
             pair_bundles[pair] = generate_pair_attestation_bundle(
                 chip_cert_path=chip_cert_path,
+                chip_root=chip_root,
                 output_dir=output_dir / "pairs",
                 vendor_id_hex=vendor_id_hex,
                 product_id_hex=product_id_hex,
@@ -376,8 +395,14 @@ def main() -> int:
     manifest_path = pathlib.Path(args.manifest).resolve()
     output_dir = pathlib.Path(args.output_dir).resolve()
     manifest_out_path = pathlib.Path(args.manifest_out).resolve()
-    requested_chip_cert = pathlib.Path(args.chip_cert).expanduser().resolve()
-    chip_cert_path, searched_paths = resolve_chip_cert_path(requested_chip_cert, CHIP_ROOT)
+    chip_root = pathlib.Path(args.chip_root).expanduser().resolve()
+    default_chip_cert_arg = str(resolve_default_chip_cert_path())
+    requested_chip_cert = (
+        resolve_default_chip_cert_path(chip_root=chip_root)
+        if args.chip_cert == default_chip_cert_arg
+        else pathlib.Path(args.chip_cert).expanduser().resolve()
+    )
+    chip_cert_path, searched_paths = resolve_chip_cert_path(requested_chip_cert, chip_root)
 
     if not manifest_path.is_file():
         raise SystemExit(f"Manifest not found: {manifest_path}")
@@ -385,7 +410,7 @@ def main() -> int:
         raise SystemExit(
             render_chip_cert_missing_message(
                 requested_path=requested_chip_cert,
-                chip_root=CHIP_ROOT,
+                chip_root=chip_root,
                 searched_paths=searched_paths,
             )
         )
@@ -396,6 +421,7 @@ def main() -> int:
         rows=rows,
         output_dir=output_dir,
         chip_cert_path=chip_cert_path,
+        chip_root=chip_root,
         vendor_name=args.vendor_name,
         product_name=args.product_name,
         valid_from=args.valid_from,

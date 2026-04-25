@@ -45,6 +45,7 @@ try:
         EXAMPLE_DIR,
         PROJECT_ROOT,
         TOOLS_DIR,
+        resolve_chip_root,
     )
     from .tool_python import resolve_tool_python
 except ImportError:
@@ -74,6 +75,7 @@ except ImportError:
         EXAMPLE_DIR,
         PROJECT_ROOT,
         TOOLS_DIR,
+        resolve_chip_root,
     )
     from tool_python import resolve_tool_python
 
@@ -468,6 +470,19 @@ def ensure_example_tree() -> None:
         raise SystemExit(f"ESP-Matter checkout not found: {ESP_MATTER_ROOT}")
 
 
+def ensure_skip_build_assets() -> pathlib.Path:
+    return resolve_chip_root(require=True)
+
+
+def require_example_tree_for_flash_features(*, action: str) -> None:
+    if EXAMPLE_DIR.is_dir() and ESP_MATTER_ROOT.is_dir():
+        return
+    raise SystemExit(
+        f"{action} requires the esp-matter example checkout.\n"
+        "Use a clone with initialized submodules, or skip that option."
+    )
+
+
 def list_missing_submodules() -> list[str]:
     completed = subprocess.run(
         ["git", "submodule", "status", "--recursive"],
@@ -784,15 +799,24 @@ def validate_dac_provider_config(*, dac_provider: str, vendor_id: str, product_i
     )
 
 
-def validate_test_attestation_pair(*, vendor_id: str, product_id: str) -> None:
+def validate_test_attestation_pair(
+    *,
+    chip_root: pathlib.Path,
+    vendor_id: str,
+    product_id: str,
+) -> None:
     generate_factory_data.ensure_test_attestation_pair_supported(
-        chip_root=CHIP_ROOT,
+        chip_root=chip_root,
         vendor_id_hex=generate_factory_data.format_manifest_hex_u16(vendor_id),
         product_id_hex=generate_factory_data.format_manifest_hex_u16(product_id),
     )
 
 
-def validate_test_attestation_manifest(manifest_path: pathlib.Path) -> None:
+def validate_test_attestation_manifest(
+    manifest_path: pathlib.Path,
+    *,
+    chip_root: pathlib.Path,
+) -> None:
     rows = load_manifest_rows(manifest_path)
     checked_pairs: set[tuple[str, str]] = set()
     for index, row in enumerate(rows, start=2):
@@ -804,6 +828,7 @@ def validate_test_attestation_manifest(manifest_path: pathlib.Path) -> None:
         checked_pairs.add(pair)
         try:
             validate_test_attestation_pair(
+                chip_root=chip_root,
                 vendor_id=row["vendor_id"],
                 product_id=row["product_id"],
             )
@@ -1015,14 +1040,15 @@ def prepend_env_path(env: dict[str, str], *paths: pathlib.Path) -> dict[str, str
 
 
 def build_matter_environment(base_env: dict[str, str]) -> dict[str, str]:
+    chip_root = resolve_chip_root()
     env = base_env.copy()
     env["ESP_MATTER_PATH"] = str(ESP_MATTER_ROOT)
-    env["ZAP_INSTALL_PATH"] = str(CHIP_ROOT / ".environment" / "cipd" / "packages" / "zap")
-    env["_PW_ACTUAL_ENVIRONMENT_ROOT"] = str(CHIP_ROOT / ".environment")
+    env["ZAP_INSTALL_PATH"] = str(chip_root / ".environment" / "cipd" / "packages" / "zap")
+    env["_PW_ACTUAL_ENVIRONMENT_ROOT"] = str(chip_root / ".environment")
     return prepend_env_path(
         env,
-        CHIP_ROOT / ".environment" / "cipd" / "packages" / "pigweed",
-        CHIP_ROOT / "out" / "host",
+        chip_root / ".environment" / "cipd" / "packages" / "pigweed",
+        chip_root / "out" / "host",
     )
 
 
@@ -1284,7 +1310,13 @@ def build_idf_command(build_dir: pathlib.Path, override_path: pathlib.Path, targ
     return command
 
 
-def build_factory_data_command(args: argparse.Namespace, manifest_path: pathlib.Path, output_dir: pathlib.Path) -> list[str]:
+def build_factory_data_command(
+    args: argparse.Namespace,
+    manifest_path: pathlib.Path,
+    output_dir: pathlib.Path,
+    *,
+    chip_root: pathlib.Path,
+) -> list[str]:
     command = [
         resolve_tool_python(),
         str(TOOLS_DIR / "generate_factory_data.py"),
@@ -1298,6 +1330,8 @@ def build_factory_data_command(args: argparse.Namespace, manifest_path: pathlib.
         args.product_name,
         "--target",
         args.target,
+        "--chip-root",
+        str(chip_root),
     ]
     if args.use_test_attestation:
         command.append("--use-test-attestation")
@@ -1320,6 +1354,8 @@ def build_attestation_generation_command(
     args: argparse.Namespace,
     manifest_path: pathlib.Path,
     output_dir: pathlib.Path,
+    *,
+    chip_root: pathlib.Path,
 ) -> list[str]:
     attestation_output_dir = generated_attestation_output_dir(output_dir)
     command = [
@@ -1335,6 +1371,8 @@ def build_attestation_generation_command(
         args.vendor_name,
         "--product-name",
         args.product_name,
+        "--chip-root",
+        str(chip_root),
     ]
     return command
 
@@ -1441,6 +1479,9 @@ def build_erase_command(build_dir: pathlib.Path, port: str) -> list[str]:
 
 
 def validate_run_args(args: argparse.Namespace, manifest_path: pathlib.Path) -> None:
+    chip_root = resolve_chip_root(
+        require=getattr(args, "skip_build", False) or args.use_test_attestation
+    )
     vendor_id = getattr(args, "vendor_id", None)
     product_id = getattr(args, "product_id", None)
     if vendor_id is not None and product_id is not None:
@@ -1454,11 +1495,12 @@ def validate_run_args(args: argparse.Namespace, manifest_path: pathlib.Path) -> 
     if args.use_test_attestation:
         if args.count is not None:
             validate_test_attestation_pair(
+                chip_root=chip_root,
                 vendor_id=args.vendor_id,
                 product_id=args.product_id,
             )
         elif manifest_path.is_file():
-            validate_test_attestation_manifest(manifest_path)
+            validate_test_attestation_manifest(manifest_path, chip_root=chip_root)
     if args.count is None and not manifest_path.is_file():
         raise SystemExit(f"Manifest not found: {manifest_path}. Pass --count to generate one.")
     if args.flash and not args.port:
@@ -1482,11 +1524,14 @@ def run_label_generation(args: argparse.Namespace, output_dir: pathlib.Path) -> 
 
 
 def run_pipeline(args: argparse.Namespace) -> int:
-    ensure_example_tree()
-
     manifest_path = pathlib.Path(args.manifest).resolve()
     output_dir = pathlib.Path(args.output_dir).resolve()
     build_dir = pathlib.Path(args.build_dir).resolve()
+    if args.skip_build:
+        chip_root = ensure_skip_build_assets()
+    else:
+        ensure_example_tree()
+        chip_root = resolve_chip_root()
     validate_run_args(args, manifest_path)
     should_flash = bool(args.port)
     should_monitor = should_open_post_flash_monitor(
@@ -1507,7 +1552,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
     if should_generate_attestation_assets(args):
         factory_manifest_path = generated_attestation_manifest_path(output_dir)
         steps.append(("Generate development attestation assets", lambda: run_command(
-            build_attestation_generation_command(args, manifest_path, output_dir),
+            build_attestation_generation_command(args, manifest_path, output_dir, chip_root=chip_root),
             cwd=PROJECT_ROOT,
             dry_run=args.dry_run,
         )))
@@ -1527,7 +1572,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
             apply_repo_patches=getattr(args, "apply_patches", False),
         )))
     steps.append(("Generate factory data and onboarding codes", lambda: run_command(
-        build_factory_data_command(args, factory_manifest_path, output_dir),
+        build_factory_data_command(args, factory_manifest_path, output_dir, chip_root=chip_root),
         cwd=PROJECT_ROOT,
         dry_run=args.dry_run,
         require_idf=True,
@@ -1536,6 +1581,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         steps.append(("Generate labels", lambda: run_label_generation(args, output_dir)))
     if should_flash:
         if args.erase:
+            require_example_tree_for_flash_features(action="Erase before flash")
             steps.append(("Erase flash", lambda: run_command(
                 build_erase_command(build_dir, args.port),
                 cwd=EXAMPLE_DIR,
@@ -1569,6 +1615,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
 
         steps.append(("Flash selected device", flash_device))
         if should_monitor:
+            require_example_tree_for_flash_features(action="Serial monitor")
             monitor_action = lambda: run_command(
                 build_monitor_command(build_dir, args.port),
                 cwd=EXAMPLE_DIR,
@@ -1607,7 +1654,6 @@ def run_pipeline(args: argparse.Namespace) -> int:
 
 
 def flash_only(args: argparse.Namespace) -> int:
-    ensure_example_tree()
     output_dir = pathlib.Path(args.output_dir).resolve()
     build_dir = pathlib.Path(args.build_dir).resolve()
 
@@ -1620,6 +1666,7 @@ def flash_only(args: argparse.Namespace) -> int:
     steps = []
     monitor_action: Callable[[], object] | None = None
     if args.erase:
+        require_example_tree_for_flash_features(action="Erase before flash")
         steps.append(("Erase flash", lambda: run_command(
             build_erase_command(build_dir, args.port),
             cwd=EXAMPLE_DIR,
@@ -1653,6 +1700,7 @@ def flash_only(args: argparse.Namespace) -> int:
 
     steps.append(("Flash selected device", flash_device))
     if should_monitor:
+        require_example_tree_for_flash_features(action="Serial monitor")
         monitor_action = lambda: run_command(
             build_monitor_command(build_dir, args.port),
             cwd=EXAMPLE_DIR,

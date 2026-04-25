@@ -52,6 +52,8 @@ If `gn` is missing, pipeline runs Matter bootstrap automatically.
 
 If nested submodules are missing, pipeline initializes them automatically.
 
+If you run with `--skip-build`, pipeline can use `provisioning-support/connectedhomeip` from the release bundle instead of a live `esp-matter/` checkout.
+
 ## Build Output Path
 
 Default build dir:
@@ -74,6 +76,10 @@ When flashing, pipeline:
 3. generates exact `esptool.py` command
 4. optionally erases flash first
 5. flashes selected device
+
+Plain flashing from a released build works without submodules.
+
+`erase-flash` and `idf.py monitor` still need the upstream example checkout.
 
 ## Labels
 

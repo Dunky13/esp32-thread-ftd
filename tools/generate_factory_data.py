@@ -16,21 +16,23 @@ if __package__ in (None, ""):
     from fleet_data import load_manifest_rows, read_onboarding_codes, write_devices_summary
     from tool_python import resolve_tool_python
     from tool_paths import (
-        CHIP_ROOT,
-        DEFAULT_CHIP_CERT,
-        DEFAULT_FACTORY_GENERATOR,
         DEFAULT_MANIFEST_PATH,
         DEFAULT_OUTPUT_DIR,
+        resolve_chip_root,
+        resolve_default_chip_cert_path,
+        resolve_factory_generator_path,
+        resolve_setuppayload_requirements_path,
     )
 else:
     from .fleet_data import load_manifest_rows, read_onboarding_codes, write_devices_summary
     from .tool_python import resolve_tool_python
     from .tool_paths import (
-        CHIP_ROOT,
-        DEFAULT_CHIP_CERT,
-        DEFAULT_FACTORY_GENERATOR,
         DEFAULT_MANIFEST_PATH,
         DEFAULT_OUTPUT_DIR,
+        resolve_chip_root,
+        resolve_default_chip_cert_path,
+        resolve_factory_generator_path,
+        resolve_setuppayload_requirements_path,
     )
 
 
@@ -40,9 +42,6 @@ DEFAULT_DISCOVERY_MODE = "2"
 DEFAULT_COMMISSIONING_FLOW = "0"
 DEFAULT_LIGHT_DEVICE_TYPE = "0x010D"
 TEST_CERTIFICATION_ID = "ZIG0000000000000000"
-SETUPPAYLOAD_REQUIREMENTS = (
-    CHIP_ROOT / "scripts" / "setup" / "requirements.setuppayload.txt"
-)
 SETUPPAYLOAD_IMPORT_CHECK = "import bitarray, click, construct, stdnum"
 TEST_PAI_CERT_PATTERN = re.compile(
     r"Chip-Test-PAI-([0-9A-F]{4})-([0-9A-F]{4})-Cert\.der$"
@@ -50,6 +49,7 @@ TEST_PAI_CERT_PATTERN = re.compile(
 
 
 def parse_args() -> argparse.Namespace:
+    chip_root = resolve_chip_root()
     parser = argparse.ArgumentParser(
         description="Generate per-device Matter factory data and onboarding codes.",
     )
@@ -90,13 +90,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--generator",
-        default=str(DEFAULT_FACTORY_GENERATOR),
+        default=str(resolve_factory_generator_path(chip_root=chip_root)),
         help="Path to generate_esp32_chip_factory_bin.py.",
     )
     parser.add_argument(
         "--chip-cert",
-        default=str(DEFAULT_CHIP_CERT),
+        default=str(resolve_default_chip_cert_path(chip_root=chip_root)),
         help="Path to CHIP host chip-cert tool used to generate test CDs when needed.",
+    )
+    parser.add_argument(
+        "--chip-root",
+        default=str(chip_root),
+        help="Path to connectedhomeip root used for factory generator assets.",
     )
     parser.add_argument(
         "--use-test-attestation",
@@ -266,6 +271,8 @@ def render_chip_cert_missing_message(
             "  source scripts/activate.sh",
             "  gn gen out/host",
             "  ninja -C out/host chip-cert",
+            "",
+            "Or extract a release bundle that includes provisioning-support/connectedhomeip.",
         ]
     )
     return "\n".join(lines)
@@ -667,8 +674,19 @@ def build_generator_pythonpath(
 def main() -> int:
     args = parse_args()
     manifest_path = pathlib.Path(args.manifest).resolve()
-    generator_path = pathlib.Path(args.generator).resolve()
-    chip_cert_path = pathlib.Path(args.chip_cert).expanduser().resolve()
+    chip_root = pathlib.Path(args.chip_root).expanduser().resolve()
+    default_generator_arg = str(resolve_factory_generator_path())
+    default_chip_cert_arg = str(resolve_default_chip_cert_path())
+    generator_path = (
+        resolve_factory_generator_path(chip_root=chip_root)
+        if args.generator == default_generator_arg
+        else pathlib.Path(args.generator).resolve()
+    )
+    chip_cert_path = (
+        resolve_default_chip_cert_path(chip_root=chip_root)
+        if args.chip_cert == default_chip_cert_arg
+        else pathlib.Path(args.chip_cert).expanduser().resolve()
+    )
     output_root = pathlib.Path(args.output_dir).resolve()
     shim_root = pathlib.Path(__file__).resolve().parent / "_factory_generator_shim"
     tool_python = resolve_tool_python()
@@ -677,13 +695,14 @@ def main() -> int:
         raise SystemExit(f"Manifest not found: {manifest_path}")
     if not generator_path.is_file():
         raise SystemExit(f"Generator not found: {generator_path}")
-    if not SETUPPAYLOAD_REQUIREMENTS.is_file():
+    requirements_path = resolve_setuppayload_requirements_path(chip_root=chip_root)
+    if not requirements_path.is_file():
         raise SystemExit(
-            f"Missing CHIP setup-payload requirements file: {SETUPPAYLOAD_REQUIREMENTS}"
+            f"Missing CHIP setup-payload requirements file: {requirements_path}"
         )
     verify_setup_payload_python_dependencies(
         python_executable=tool_python,
-        requirements_path=SETUPPAYLOAD_REQUIREMENTS,
+        requirements_path=requirements_path,
         auto_install=not args.no_auto_install_deps,
     )
     rows = load_manifest_rows(manifest_path)
@@ -699,7 +718,7 @@ def main() -> int:
             row=row,
             row_index=row_index,
             manifest_dir=manifest_path.parent,
-            chip_root=CHIP_ROOT,
+            chip_root=chip_root,
             chip_cert=chip_cert_path,
             device_output_dir=device_output_dir,
             use_test_attestation=args.use_test_attestation,
