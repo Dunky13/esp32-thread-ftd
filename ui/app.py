@@ -103,6 +103,7 @@ section {{
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 16px;
+  min-width: 0;
 }}
 h2 {{ margin: 0 0 12px; font-size: 18px; }}
 form {{ display: grid; gap: 12px; }}
@@ -142,7 +143,19 @@ code {{ display: inline-block; max-width: 100%; overflow-wrap: anywhere; word-br
 .muted {{ color: var(--muted); }}
 .badge {{ border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--ok); }}
 .notice {{ border-left: 4px solid var(--warn); padding: 10px 12px; background: #fff7ed; }}
-pre {{ max-height: 360px; overflow: auto; padding: 12px; background: #111827; color: #d1fae5; border-radius: 8px; }}
+pre {{
+  max-width: 100%;
+  max-height: 360px;
+  min-width: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 12px;
+  background: #111827;
+  color: #d1fae5;
+  border-radius: 8px;
+}}
 iframe {{ width: 100%; min-height: 420px; border: 1px solid var(--line); border-radius: 8px; background: white; }}
 @media (max-width: 720px) {{
   .device-meta {{ grid-template-columns: 1fr; }}
