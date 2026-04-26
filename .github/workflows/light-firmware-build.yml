@@ -270,7 +270,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: light-c6-thread-provisioning-support
-          path: .
+          path: provisioning-support
 
       - name: Package build artifacts
         shell: bash
